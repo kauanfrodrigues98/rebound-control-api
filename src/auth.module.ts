@@ -48,6 +48,6 @@ import { AuthController } from './presentation/http/auth.controller';
       useExisting: JwtTokenService,
     },
   ],
-  exports: [AuthGuard],
+  exports: [AuthGuard, AuthCookieService, JwtTokenService, RedisModule],
 })
 export class AuthModule {}
