@@ -29,11 +29,22 @@ async function runMigrations() {
       migrations.forEach((migration) => console.log(`   - ${migration.name}`));
     }
 
-    await dataSource.destroy();
+    await closeDataSource(dataSource);
+    process.exit(0);
   } catch (error) {
     console.error('Migration failed:', error);
+    await closeDataSource(dataSource);
     process.exit(1);
   }
+}
+
+async function closeDataSource(dataSource: DataSource) {
+  if (!dataSource.isInitialized) return;
+
+  await Promise.race([
+    dataSource.destroy(),
+    new Promise((resolve) => setTimeout(resolve, 5_000)),
+  ]);
 }
 
 runMigrations();
