@@ -44,6 +44,31 @@ export class LicensingAdminClient {
     return payload as TResponse;
   }
 
+  async publicRequest<TResponse>(
+    path: string,
+    options: LicensingRequestOptions = {},
+  ): Promise<TResponse> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: options.method ?? 'GET',
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const payload = await this.parseResponse(response);
+
+    if (!response.ok) {
+      throw new HttpException(
+        this.extractMessage(payload) ??
+          'A comunicacao com o servico de licenciamento falhou.',
+        response.status,
+      );
+    }
+
+    return payload as TResponse;
+  }
+
   private async parseResponse(response: Response): Promise<unknown> {
     const text = await response.text();
     if (!text) return {};
