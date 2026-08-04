@@ -8,7 +8,7 @@ import {
 } from 'typeorm';
 import type { ControlUserRole } from '../../../domain/entities/control-user';
 
-@Entity('control_users')
+@Entity({ name: 'control_users', schema: 'control' })
 export class ControlUserOrmEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
