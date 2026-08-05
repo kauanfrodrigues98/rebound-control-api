@@ -9,6 +9,7 @@ export const AppDataSource = new DataSource({
   username: env.DATABASE_USERNAME,
   password: env.DATABASE_PASSWORD,
   database: env.DATABASE_NAME,
+  schema: 'control',
   ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
   entities: [ControlUserOrmEntity],
   migrations: ['dist/infra/typeorm/migrations/*.js'],

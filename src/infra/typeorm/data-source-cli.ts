@@ -8,6 +8,7 @@ export default new DataSource({
   username: env.DATABASE_USERNAME,
   password: env.DATABASE_PASSWORD,
   database: env.DATABASE_NAME,
+  schema: 'control',
   ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
   entities: ['src/infra/typeorm/entities/*.orm-entity.ts'],
   migrations: ['src/infra/typeorm/migrations/*.ts'],
