@@ -12,7 +12,10 @@ async function runMigrations() {
     database: env.DATABASE_NAME,
     schema: 'control',
     ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : false,
-    migrations: [path.join(__dirname, 'migrations', '*.js')],
+    migrations: [
+      path.join(__dirname, 'migrations', '*.js'),
+      path.join(__dirname, 'migrations', '*.ts'),
+    ],
     synchronize: false,
     migrationsRun: false,
   });

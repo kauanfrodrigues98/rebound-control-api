@@ -6,6 +6,7 @@ import { AuthModule } from './auth.module';
 import { env } from './config/env';
 import { DatabaseModule } from './infra/typeorm/database.module';
 import { LicensingControlModule } from './licensing-control.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { LicensingControlModule } from './licensing-control.module';
     DatabaseModule,
     AuthModule,
     LicensingControlModule,
+    CustomersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
