@@ -48,6 +48,8 @@ const envSchema = z.object({
   CONTROL_ADMIN_SETUP_TOKEN: z.string().min(24).optional(),
   CONTROL_ADMIN_NAME: z.string().min(1).default('Administrador Rebound'),
 
+  CONTRACT_COMMERCIAL_SYNC_ENABLED: booleanFromEnv.default(false),
+
   BILLING_SERVICE_URL: z.string().url().default('http://localhost:3004'),
   BILLING_ADMIN_API_KEY: z.string().min(1).optional(),
 

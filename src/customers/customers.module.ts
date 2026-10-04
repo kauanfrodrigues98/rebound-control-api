@@ -1,3 +1,4 @@
+import { ContractCommercialModule } from '../commercial/contract-commercial.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth.module';
@@ -12,6 +13,7 @@ import { CustomersService } from './customers.service';
 @Module({
   imports: [
     AuthModule,
+    ContractCommercialModule,
     TypeOrmModule.forFeature([
       CustomerOrmEntity,
       CustomerContactOrmEntity,
