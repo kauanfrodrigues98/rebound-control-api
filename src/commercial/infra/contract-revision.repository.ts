@@ -90,6 +90,14 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
         `SELECT ${columns} FROM control.contract_commercial_revisions WHERE contract_id=$1 ORDER BY source_version DESC LIMIT 1`,
         [contractId],
       );
+      const [enrollment] = await manager.query<{ startsOn: string }[]>(
+        `SELECT r.payload->>'startsOn' AS "startsOn" FROM control.contract_billing_enrollments e JOIN control.contract_commercial_revisions r ON r.id=e.initial_revision_id WHERE e.contract_id=$1`,
+        [contractId],
+      );
+      if (enrollment && input.startsOn !== enrollment.startsOn)
+        throw new ConflictException(
+          'Início contratual não pode mudar depois de habilitar a recorrência.',
+        );
       const at = new Date(input.effectiveAt).getTime();
       if (
         at < Date.now() - 60000 ||
