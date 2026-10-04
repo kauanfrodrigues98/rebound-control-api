@@ -1,3 +1,4 @@
+import { BillingControlModule } from './billing/billing-control.module';
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
@@ -20,6 +21,7 @@ import { CustomersModule } from './customers/customers.module';
     AuthModule,
     LicensingControlModule,
     CustomersModule,
+    BillingControlModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -7,7 +7,9 @@ const booleanFromEnv = z.preprocess((value) => {
 }, z.boolean());
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .default('development'),
   PORT: z.coerce.number().int().positive().default(3021),
   HOST: z.string().min(1).default('127.0.0.1'),
   CONTROL_FRONTEND_URL: z.string().url().default('http://localhost:3020'),
@@ -46,6 +48,9 @@ const envSchema = z.object({
   CONTROL_ADMIN_SETUP_TOKEN: z.string().min(24).optional(),
   CONTROL_ADMIN_NAME: z.string().min(1).default('Administrador Rebound'),
 
+  BILLING_SERVICE_URL: z.string().url().default('http://localhost:3004'),
+  BILLING_ADMIN_API_KEY: z.string().min(1).optional(),
+
   LICENSING_SERVICE_URL: z.string().url().default('http://localhost:3002'),
   LICENSING_ADMIN_API_KEY: z.string().min(1).optional(),
 });
@@ -72,6 +77,8 @@ if (env.NODE_ENV === 'production') {
     env.JWT_REFRESH_SECRET.startsWith('development-');
 
   if (usingDevelopmentSecret) {
-    throw new Error('JWT_ACCESS_SECRET e JWT_REFRESH_SECRET devem ser definidos em produção.');
+    throw new Error(
+      'JWT_ACCESS_SECRET e JWT_REFRESH_SECRET devem ser definidos em produção.',
+    );
   }
 }
