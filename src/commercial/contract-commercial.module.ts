@@ -1,3 +1,7 @@
+import { ContractCancellationService } from './application/contract-cancellation.service';
+import { ContractFinancialService } from './application/contract-financial.service';
+import { ContractFinancialWorker } from './application/contract-financial.worker';
+import { ContractFinancialController } from './presentation/contract-financial.controller';
 import { ContractRecurrenceController } from './presentation/contract-recurrence.controller';
 import { ContractRecurrenceService } from './application/contract-recurrence.service';
 import { ContractRecurrenceWorker } from './application/contract-recurrence.worker';
@@ -15,8 +19,15 @@ import { CONTRACT_REVISION_REPOSITORY } from './domain/contract-terms';
 import { ContractCommercialController } from './presentation/contract-commercial.controller';
 @Module({
   imports: [AuthModule],
-  controllers: [ContractCommercialController, ContractRecurrenceController],
+  controllers: [
+    ContractFinancialController,
+    ContractCommercialController,
+    ContractRecurrenceController,
+  ],
   providers: [
+    ContractCancellationService,
+    ContractFinancialService,
+    ContractFinancialWorker,
     BillingAdminClient,
     LicensingAdminClient,
     FinancialOperatorGuard,
@@ -33,6 +44,10 @@ import { ContractCommercialController } from './presentation/contract-commercial
       useClass: ContractRevisionRepository,
     },
   ],
-  exports: [ContractCommercialService],
+  exports: [
+    ContractCommercialService,
+    ContractRecurrenceService,
+    ContractFinancialService,
+  ],
 })
 export class ContractCommercialModule {}

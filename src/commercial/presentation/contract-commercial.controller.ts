@@ -1,3 +1,4 @@
+import { ContractCancellationService } from '../application/contract-cancellation.service';
 import {
   Body,
   Controller,
@@ -20,7 +21,10 @@ import { ContractCommercialService } from '../application/contract-commercial.se
 @UseGuards(AuthGuard, FinancialOperatorGuard)
 @Controller('billing/customers/:customerId/contracts/:contractId/terms')
 export class ContractCommercialController {
-  constructor(private readonly commercial: ContractCommercialService) {}
+  constructor(
+    private readonly commercial: ContractCommercialService,
+    private readonly cancellations: ContractCancellationService,
+  ) {}
   @Get()
   list(
     @Param('customerId', new ParseUUIDPipe()) customerId: string,
@@ -38,6 +42,21 @@ export class ContractCommercialController {
     @Headers('idempotency-key') key: string,
   ) {
     return this.commercial.publish(customerId, contractId, body, actor.id, key);
+  }
+  @Post(':revisionId/cancel') cancel(
+    @Param('customerId', new ParseUUIDPipe()) customer: string,
+    @Param('contractId', new ParseUUIDPipe()) contract: string,
+    @Param('revisionId', new ParseUUIDPipe()) revision: string,
+    @Body() body: unknown,
+    @CurrentUser() actor: CurrentControlUser,
+  ) {
+    return this.cancellations.cancel(
+      customer,
+      contract,
+      revision,
+      body,
+      actor.id,
+    );
   }
   @Post(':revisionId/sync')
   sync(

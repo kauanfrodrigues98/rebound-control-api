@@ -63,7 +63,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
           'Somente contratos ativos podem iniciar recorrência.',
         );
       const [current] = await manager.query<ContractRevision[]>(
-        `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
+        `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
         [contractId],
       );
       const [clock] = await manager.query<{ today: string }[]>(
@@ -140,7 +140,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         );
       if (!row.enabled || !row.nextCycleOn) return row;
       const [current] = await manager.query<ContractRevision[]>(
-        `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
+        `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
         [contractId],
       );
       try {
@@ -149,7 +149,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         let periodRevisionId = row.initialRevisionId;
         if (row.nextCycleOn !== row.firstCycleOn) {
           const [period] = await manager.query<ContractRevision[]>(
-            `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND (payload->>'effectiveAt')::timestamptz<=($2::date::timestamp AT TIME ZONE 'America/Recife') ORDER BY source_version DESC LIMIT 1`,
+            `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=($2::date::timestamp AT TIME ZONE 'America/Recife') ORDER BY source_version DESC LIMIT 1`,
             [contractId, row.nextCycleOn],
           );
           if (!period || period.status !== 'synced')

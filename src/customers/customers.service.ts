@@ -321,11 +321,13 @@ export class CustomersService {
     }
 
     const terms = await this.commercial.licenseTerms(customerId, contractId);
-    const expiresAt = terms?.endsOn
-      ? new Date(`${terms.endsOn}T23:59:59.999-03:00`)
-      : this.resolveContractLicenseExpiration(
-          terms ? { ...contract, endsOn: terms.endsOn } : contract,
-        );
+    const expiresAt = terms?.financiallyVerifiedUntil
+      ? new Date(terms.financiallyVerifiedUntil)
+      : terms?.endsOn
+        ? new Date(`${terms.endsOn}T23:59:59.999-03:00`)
+        : this.resolveContractLicenseExpiration(
+            terms ? { ...contract, endsOn: terms.endsOn } : contract,
+          );
     if (expiresAt.getTime() <= Date.now())
       throw new BadRequestException('Contrato fora do período de vigência.');
 

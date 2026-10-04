@@ -101,6 +101,16 @@ export class BillingControlController {
       { method: 'DELETE', actorId: actor.id },
     );
   }
+  @Get('card') card(@Param('customerId', new ParseUUIDPipe()) id: string) {
+    return this.billing.request(`/financial/customers/${id}/card`);
+  }
+  @Post('card/customer') provisionCard(
+    @Param('customerId', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.billing.request(`/financial/customers/${id}/card/customer`, {
+      method: 'POST',
+    });
+  }
   @Get('invoices/:invoiceId')
   details(
     @Param('customerId', new ParseUUIDPipe()) customerId: string,

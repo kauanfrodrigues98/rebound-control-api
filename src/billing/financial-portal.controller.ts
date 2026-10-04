@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -80,6 +81,31 @@ export class FinancialPortalController {
   current(@Req() request: Request) {
     return this.billing.request('/financial/portal/session', {
       method: 'POST',
+      access: financialCookie(request),
+    });
+  }
+  @Get('card') card(@Req() request: Request) {
+    return this.billing.request('/financial/portal/card', {
+      access: financialCookie(request),
+    });
+  }
+  @Post('card/setup') setupCard(
+    @Req() request: Request,
+    @Body() body: unknown,
+  ) {
+    const key = request.headers['idempotency-key'];
+    if (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(key))
+      throw new BadRequestException('Chave inválida.');
+    return this.billing.request('/financial/portal/card/setup', {
+      method: 'POST',
+      body,
+      key,
+      access: financialCookie(request),
+    });
+  }
+  @Delete('card') disableCard(@Req() request: Request) {
+    return this.billing.request('/financial/portal/card', {
+      method: 'DELETE',
       access: financialCookie(request),
     });
   }

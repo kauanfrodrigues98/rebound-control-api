@@ -114,6 +114,7 @@ export interface ContractReference {
   status: string;
 }
 export interface ContractRevision {
+  cancelledAt?: Date | null;
   id: string;
   contractId: string;
   customerId: string;

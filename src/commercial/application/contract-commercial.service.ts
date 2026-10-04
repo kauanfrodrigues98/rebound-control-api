@@ -1,3 +1,4 @@
+import { ContractFinancialService } from './contract-financial.service';
 import {
   BadRequestException,
   ConflictException,
@@ -35,6 +36,7 @@ interface Price {
 export function revisionResponse(row: ContractRevision) {
   return {
     id: row.id,
+    cancelledAt: row.cancelledAt ?? null,
     sourceVersion: row.sourceVersion,
     terms: row.payload,
     status: row.status,
@@ -56,6 +58,7 @@ export class ContractCommercialService {
     @Inject(CONTRACT_REVISION_REPOSITORY)
     private readonly revisions: ContractRevisionRepositoryPort,
     private readonly billing: BillingAdminClient,
+    private readonly financial: ContractFinancialService,
     private readonly licensing: LicensingAdminClient,
   ) {}
   async list(customerId: string, contractId: string, page = 1) {
@@ -179,6 +182,7 @@ export class ContractCommercialService {
     uuid(revisionId);
     const row = await this.revisions.byId(contractId, revisionId);
     if (!row) throw new NotFoundException('Revisão não encontrada.');
+    if (row.cancelledAt) throw new ConflictException('Revisão cancelada.');
     if (row.status === 'synced') return revisionResponse(row);
     const delivered = await this.deliver(row.id);
     if (!delivered)
@@ -235,12 +239,15 @@ export class ContractCommercialService {
       (current.payload.endsOn && current.payload.endsOn < today)
     )
       throw new ConflictException('Contrato fora do período de vigência.');
+    const paid = await this.financial.licensePeriod(customerId, contractId);
+    const licensed = paid?.terms ?? current.payload;
     return {
-      ...current.payload,
+      ...licensed,
+      financiallyVerifiedUntil: paid?.validUntil ?? null,
       entitlements: {
-        ...current.payload.entitlements,
-        commercialRevisionId: current.id,
-        commercialVersion: current.sourceVersion,
+        ...licensed.entitlements,
+        commercialRevisionId: licensed.sourceRevisionId,
+        commercialVersion: licensed.sourceVersion,
       },
     };
   }

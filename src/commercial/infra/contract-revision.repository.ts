@@ -11,7 +11,7 @@ import type {
   ContractRevisionRepositoryPort,
   ContractSnapshot,
 } from '../domain/contract-terms';
-const columns = `id, contract_id AS "contractId", customer_id AS "customerId", source_version AS "sourceVersion", payload,
+const columns = `cancelled_at AS "cancelledAt",id, contract_id AS "contractId", customer_id AS "customerId", source_version AS "sourceVersion", payload,
  request_hash AS "requestHash", created_by AS "createdBy", status, attempts, billing_version_id AS "billingVersionId",
  synced_at AS "syncedAt", last_error AS "lastError", claim_id AS "claimId", created_at AS "createdAt"`;
 @Injectable()
@@ -54,7 +54,7 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
   }
   async current(contractId: string) {
     const [row] = await this.source.query<ContractRevision[]>(
-      `SELECT ${columns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
+      `SELECT ${columns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
       [contractId],
     );
     return row ?? null;
@@ -98,10 +98,15 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
         throw new ConflictException(
           'Início contratual não pode mudar depois de habilitar a recorrência.',
         );
+      const [latestActive] = await manager.query<ContractRevision[]>(
+        `SELECT ${columns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL ORDER BY source_version DESC LIMIT 1`,
+        [contractId],
+      );
       const at = new Date(input.effectiveAt).getTime();
       if (
         at < Date.now() - 60000 ||
-        (latest && at <= new Date(latest.payload.effectiveAt).getTime())
+        (latestActive &&
+          at <= new Date(latestActive.payload.effectiveAt).getTime())
       )
         throw new ConflictException(
           'A vigência deve ser atual/futura e posterior à última versão.',
@@ -132,7 +137,7 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
   async claim(id?: string) {
     return this.source.transaction(async (manager) => {
       const [candidate] = await manager.query<{ id: string }[]>(
-        `SELECT id FROM control.contract_commercial_revisions WHERE status='pending'
+        `SELECT id FROM control.contract_commercial_revisions WHERE status='pending' AND cancelled_at IS NULL
         AND (lease_until IS NULL OR lease_until<now()) AND ($1::uuid IS NULL OR id=$1)
         AND ($1::uuid IS NOT NULL OR (attempts<10 AND next_attempt_at<=now())) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED`,
         [id ?? null],

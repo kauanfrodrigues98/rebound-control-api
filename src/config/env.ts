@@ -48,6 +48,14 @@ const envSchema = z.object({
   CONTROL_ADMIN_SETUP_TOKEN: z.string().min(24).optional(),
   CONTROL_ADMIN_NAME: z.string().min(1).default('Administrador Rebound'),
 
+  CONTROL_CLOUD_API_KEY: z.string().min(32).optional(),
+  CLOUD_SELF_SERVICE_PLAN_IDS: z
+    .string()
+    .default('free,individual,team,enterprise'),
+  CLOUD_DEFAULT_PLAN_ID: z.string().default('free'),
+  CONTRACT_FINANCIAL_SYNC_ENABLED: booleanFromEnv.default(false),
+  FINANCIAL_SUSPENSION_ENABLED: booleanFromEnv.default(false),
+  FINANCIAL_GRACE_DAYS: z.coerce.number().int().min(1).max(30).default(7),
   CONTRACT_RECURRENCE_ENABLED: booleanFromEnv.default(false),
   CONTRACT_COMMERCIAL_SYNC_ENABLED: booleanFromEnv.default(false),
 

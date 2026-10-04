@@ -1,3 +1,4 @@
+import { ContractCancellationService } from './contract-cancellation.service';
 import {
   Injectable,
   Logger,
@@ -11,7 +12,10 @@ export class ContractSyncWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ContractSyncWorker.name);
   private timer?: NodeJS.Timeout;
   private running = false;
-  constructor(private readonly commercial: ContractCommercialService) {}
+  constructor(
+    private readonly commercial: ContractCommercialService,
+    private readonly cancellations: ContractCancellationService,
+  ) {}
   onModuleInit() {
     if (env.CONTRACT_COMMERCIAL_SYNC_ENABLED) {
       this.timer = setInterval(() => {
@@ -27,6 +31,8 @@ export class ContractSyncWorker implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      for (let i = 0; i < 10; i++)
+        if (!(await this.cancellations.deliver())) break;
       for (let i = 0; i < 10; i++)
         if (!(await this.commercial.deliver())) break;
     } catch {

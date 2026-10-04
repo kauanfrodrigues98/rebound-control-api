@@ -1,3 +1,4 @@
+import { CloudBillingModule } from './cloud-billing/cloud-billing.module';
 import { BillingControlModule } from './billing/billing-control.module';
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -11,6 +12,7 @@ import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
+    CloudBillingModule,
     ThrottlerModule.forRoot([
       {
         ttl: 60_000,
