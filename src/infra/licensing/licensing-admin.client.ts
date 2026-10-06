@@ -1,4 +1,8 @@
-import { HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  HttpException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { env } from '../../config/env';
 
 type LicensingMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -22,9 +26,10 @@ export class LicensingAdminClient {
       );
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await this.fetch(`${this.baseUrl}${path}`, {
       method: options.method ?? 'GET',
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
       headers: {
         'Content-Type': 'application/json',
         'x-admin-api-key': env.LICENSING_ADMIN_API_KEY,
@@ -48,9 +53,10 @@ export class LicensingAdminClient {
     path: string,
     options: LicensingRequestOptions = {},
   ): Promise<TResponse> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await this.fetch(`${this.baseUrl}${path}`, {
       method: options.method ?? 'GET',
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
       headers: {
         'Content-Type': 'application/json',
       },
@@ -67,6 +73,20 @@ export class LicensingAdminClient {
     }
 
     return payload as TResponse;
+  }
+
+  private async fetch(url: string, options: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(45000),
+        redirect: 'error',
+      });
+    } catch {
+      throw new ServiceUnavailableException(
+        'Não foi possível acessar o serviço de licenciamento.',
+      );
+    }
   }
 
   private async parseResponse(response: Response): Promise<unknown> {

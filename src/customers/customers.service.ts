@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ContractCommercialService } from '../commercial/application/contract-commercial.service';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, FindOptionsWhere, ILike, Repository } from 'typeorm';
 import { CustomerContactOrmEntity } from '../infra/typeorm/entities/customer-contact.orm-entity';
@@ -60,9 +65,14 @@ export class CustomersService {
     @InjectRepository(CustomerContractOrmEntity)
     private readonly contracts: Repository<CustomerContractOrmEntity>,
     private readonly licensing: LicensingAdminClient,
+    private readonly commercial: ContractCommercialService,
   ) {}
 
-  async list(filters: { search?: string; stage?: string; environment?: string }) {
+  async list(filters: {
+    search?: string;
+    stage?: string;
+    environment?: string;
+  }) {
     const where: FindOptionsWhere<CustomerOrmEntity>[] = [];
     const common: FindOptionsWhere<CustomerOrmEntity> = {};
 
@@ -90,12 +100,16 @@ export class CustomersService {
       order: { updatedAt: 'DESC' },
     });
 
-    return customers.map((customer) => this.toResponse(customer));
+    const currentPlans = await this.currentContractPlans(customers);
+    return customers.map((customer) => this.toResponse(customer, currentPlans));
   }
 
   async getById(id: string) {
     const customer = await this.findById(id);
-    return this.toResponse(customer);
+    return this.toResponse(
+      customer,
+      await this.currentContractPlans([customer]),
+    );
   }
 
   async create(body: CreateCustomerBody) {
@@ -113,7 +127,9 @@ export class CustomersService {
       expectedEnvironment: body.expectedEnvironment,
       technicalOwner: body.technicalOwner ?? null,
       notes: body.notes ?? null,
-      contacts: body.contacts.map((contact) => this.contacts.create(this.mapContactBody(contact))),
+      contacts: body.contacts.map((contact) =>
+        this.contacts.create(this.mapContactBody(contact)),
+      ),
     });
 
     const saved = await this.customers.save(customer);
@@ -127,18 +143,26 @@ export class CustomersService {
       name: body.name ?? customer.name,
       type: body.type ?? customer.type,
       stage: body.stage ?? customer.stage,
-      legalName: body.legalName === undefined ? customer.legalName : body.legalName,
+      legalName:
+        body.legalName === undefined ? customer.legalName : body.legalName,
       document: body.document === undefined ? customer.document : body.document,
       segment: body.segment === undefined ? customer.segment : body.segment,
       website: body.website === undefined ? customer.website : body.website,
       commercialOwner:
-        body.commercialOwner === undefined ? customer.commercialOwner : body.commercialOwner,
+        body.commercialOwner === undefined
+          ? customer.commercialOwner
+          : body.commercialOwner,
       priority: body.priority ?? customer.priority,
       expectedValue:
-        body.expectedValue === undefined ? customer.expectedValue : body.expectedValue,
-      expectedEnvironment: body.expectedEnvironment ?? customer.expectedEnvironment,
+        body.expectedValue === undefined
+          ? customer.expectedValue
+          : body.expectedValue,
+      expectedEnvironment:
+        body.expectedEnvironment ?? customer.expectedEnvironment,
       technicalOwner:
-        body.technicalOwner === undefined ? customer.technicalOwner : body.technicalOwner,
+        body.technicalOwner === undefined
+          ? customer.technicalOwner
+          : body.technicalOwner,
       notes: body.notes === undefined ? customer.notes : body.notes,
     });
 
@@ -171,7 +195,10 @@ export class CustomersService {
     return this.toContactResponse(saved);
   }
 
-  async addTimelineEntry(customerId: string, body: CreateCustomerTimelineEntryBody) {
+  async addTimelineEntry(
+    customerId: string,
+    body: CreateCustomerTimelineEntryBody,
+  ) {
     await this.ensureCustomerExists(customerId);
     const saved = await this.timeline.save(
       this.timeline.create({
@@ -216,37 +243,65 @@ export class CustomersService {
     contractId: string,
     body: UpdateCustomerContractBody,
   ) {
-    const contract = await this.contracts.findOne({
-      where: { id: contractId, customerId },
+    const saved = await this.dataSource.transaction(async (manager) => {
+      const repository = manager.getRepository(CustomerContractOrmEntity);
+      const contract = await repository.findOne({
+        where: { id: contractId, customerId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!contract) throw new NotFoundException('Contrato não encontrado.');
+
+      this.validateContractUpdate(contract, body);
+      if (body.status === 'encerrado') {
+        const [enrollment] = await manager.query(
+          'SELECT id FROM control.contract_billing_enrollments WHERE contract_id=$1',
+          [contractId],
+        );
+        if (enrollment)
+          throw new BadRequestException(
+            'Use Encerrar contrato no faturamento para coordenar o fim do período pago.',
+          );
+      }
+      if (
+        this.hasActiveContractDataChanges(contract, body) &&
+        (await this.commercial.hasVersions(contractId))
+      ) {
+        throw new BadRequestException(
+          'Use uma nova versão das condições comerciais para alterar este contrato.',
+        );
+      }
+
+      Object.assign(contract, {
+        plan: body.plan ?? contract.plan,
+        planId: body.planId === undefined ? contract.planId : body.planId,
+        status: body.status ?? contract.status,
+        cycle: body.cycle ?? contract.cycle,
+        monthlyValue:
+          body.monthlyValue === undefined
+            ? contract.monthlyValue
+            : body.monthlyValue,
+        setupValue:
+          body.setupValue === undefined ? contract.setupValue : body.setupValue,
+        startsOn:
+          body.startsOn === undefined ? contract.startsOn : body.startsOn,
+        endsOn: body.endsOn === undefined ? contract.endsOn : body.endsOn,
+        dueDay: body.dueDay === undefined ? contract.dueDay : body.dueDay,
+        paymentMethod:
+          body.paymentMethod === undefined
+            ? contract.paymentMethod
+            : body.paymentMethod,
+        signingContact:
+          body.signingContact === undefined
+            ? contract.signingContact
+            : body.signingContact,
+        notes: body.notes === undefined ? contract.notes : body.notes,
+      });
+
+      return repository.save(contract);
     });
-
-    if (!contract) throw new NotFoundException('Contrato não encontrado.');
-
-    this.validateContractUpdate(contract, body);
-    const previousStatus = contract.status;
-
-    Object.assign(contract, {
-      plan: body.plan ?? contract.plan,
-      planId: body.planId === undefined ? contract.planId : body.planId,
-      status: body.status ?? contract.status,
-      cycle: body.cycle ?? contract.cycle,
-      monthlyValue:
-        body.monthlyValue === undefined ? contract.monthlyValue : body.monthlyValue,
-      setupValue: body.setupValue === undefined ? contract.setupValue : body.setupValue,
-      startsOn: body.startsOn === undefined ? contract.startsOn : body.startsOn,
-      endsOn: body.endsOn === undefined ? contract.endsOn : body.endsOn,
-      dueDay: body.dueDay === undefined ? contract.dueDay : body.dueDay,
-      paymentMethod:
-        body.paymentMethod === undefined ? contract.paymentMethod : body.paymentMethod,
-      signingContact:
-        body.signingContact === undefined ? contract.signingContact : body.signingContact,
-      notes: body.notes === undefined ? contract.notes : body.notes,
-    });
-
-    const saved = await this.contracts.save(contract);
-    if (previousStatus !== saved.status && saved.status === 'encerrado') {
+    if (body.status === 'encerrado')
       await this.revokeLicensesForContract(saved.id);
-    }
     return this.toContractResponse(saved);
   }
 
@@ -254,7 +309,9 @@ export class CustomersService {
     customerId: string,
     contractId: string,
   ): Promise<ActivateLicenseResponse> {
-    const customer = await this.customers.findOne({ where: { id: customerId } });
+    const customer = await this.customers.findOne({
+      where: { id: customerId },
+    });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
 
     const contract = await this.contracts.findOne({
@@ -277,6 +334,17 @@ export class CustomersService {
       return activeLicense.license;
     }
 
+    const terms = await this.commercial.licenseTerms(customerId, contractId);
+    const expiresAt = terms?.financiallyVerifiedUntil
+      ? new Date(terms.financiallyVerifiedUntil)
+      : terms?.endsOn
+        ? new Date(`${terms.endsOn}T23:59:59.999-03:00`)
+        : this.resolveContractLicenseExpiration(
+            terms ? { ...contract, endsOn: terms.endsOn } : contract,
+          );
+    if (expiresAt.getTime() <= Date.now())
+      throw new BadRequestException('Contrato fora do período de vigência.');
+
     return this.licensing.request<ActivateLicenseResponse>(
       '/admin/licenses/activate',
       {
@@ -285,8 +353,10 @@ export class CustomersService {
           customerId: customer.id,
           contractId: contract.id,
           installationName: `${customer.name} - ${contract.plan}`,
-          expiresAt: this.resolveContractLicenseExpiration(contract).toISOString(),
-          planId: await this.resolveContractPlanId(contract),
+          expiresAt: expiresAt.toISOString(),
+          ...(terms
+            ? { entitlements: terms.entitlements }
+            : { planId: await this.resolveContractPlanId(contract) }),
         },
       },
     );
@@ -306,18 +376,28 @@ export class CustomersService {
     }
 
     if (contract.status === 'encerrado' || contract.status === 'cancelado') {
-      throw new BadRequestException('Contrato encerrado ou cancelado não pode ser alterado.');
+      throw new BadRequestException(
+        'Contrato encerrado ou cancelado não pode ser alterado.',
+      );
     }
 
-    if (contract.status === 'ativo' && this.hasActiveContractDataChanges(contract, body)) {
+    if (
+      contract.status === 'ativo' &&
+      this.hasActiveContractDataChanges(contract, body)
+    ) {
       throw new BadRequestException(
         'Contrato ativo não pode ter dados comerciais alterados. Encerre o contrato e crie um novo para novas condições.',
       );
     }
   }
 
-  private allowedContractStatuses(status: CustomerContractStatus): CustomerContractStatus[] {
-    const transitions: Record<CustomerContractStatus, CustomerContractStatus[]> = {
+  private allowedContractStatuses(
+    status: CustomerContractStatus,
+  ): CustomerContractStatus[] {
+    const transitions: Record<
+      CustomerContractStatus,
+      CustomerContractStatus[]
+    > = {
       rascunho: ['rascunho', 'em_assinatura', 'ativo', 'cancelado'],
       em_assinatura: ['em_assinatura', 'ativo', 'cancelado'],
       ativo: ['ativo', 'encerrado'],
@@ -348,7 +428,10 @@ export class CustomersService {
 
     return fields.some((field) => {
       if (body[field] === undefined) return false;
-      return (body[field] ?? null) !== (contract[this.contractFieldToEntityField(field)] ?? null);
+      return (
+        (body[field] ?? null) !==
+        (contract[this.contractFieldToEntityField(field)] ?? null)
+      );
     });
   }
 
@@ -396,7 +479,9 @@ export class CustomersService {
 
   private async generateContractCode(): Promise<string> {
     const year = new Date().getFullYear();
-    const rows = await this.dataSource.query(
+    const rows = await this.dataSource.query<
+      Array<{ last_value: number | string }>
+    >(
       `
         INSERT INTO control.contract_code_counters (year, last_value)
         VALUES ($1, 1)
@@ -451,9 +536,12 @@ export class CustomersService {
   }
 
   private async revokeLicensesForContract(contractId: string): Promise<void> {
-    await this.licensing.request(`/admin/licenses/contracts/${contractId}/revoke`, {
-      method: 'POST',
-    });
+    await this.licensing.request(
+      `/admin/licenses/contracts/${contractId}/revoke`,
+      {
+        method: 'POST',
+      },
+    );
   }
 
   private mapContactBody(body: CreateCustomerContactBody) {
@@ -467,7 +555,38 @@ export class CustomersService {
     };
   }
 
-  private toResponse(customer: CustomerOrmEntity) {
+  private async currentContractPlans(customers: CustomerOrmEntity[]) {
+    const contractIds = customers.flatMap((customer) =>
+      (customer.contracts ?? []).map((contract) => contract.id),
+    );
+    if (!contractIds.length)
+      return new Map<string, { id: string; name: string }>();
+    const rows = await this.dataSource.query<
+      Array<{ contractId: string; planId: string; planName: string | null }>
+    >(
+      `SELECT DISTINCT ON (contract_id) contract_id AS "contractId",
+       payload->>'planId' AS "planId", payload->'entitlements'->>'planName' AS "planName"
+       FROM control.contract_commercial_revisions
+       WHERE contract_id=ANY($1::uuid[]) AND status='synced' AND cancelled_at IS NULL
+       AND (payload->>'effectiveAt')::timestamptz<=now()
+       ORDER BY contract_id,source_version DESC`,
+      [contractIds],
+    );
+    return new Map(
+      rows.map((row) => [
+        row.contractId,
+        {
+          id: row.planId,
+          name: row.planName ?? row.planId,
+        },
+      ]),
+    );
+  }
+
+  private toResponse(
+    customer: CustomerOrmEntity,
+    currentPlans = new Map<string, { id: string; name: string }>(),
+  ) {
     return {
       id: customer.id,
       name: customer.name,
@@ -483,9 +602,16 @@ export class CustomersService {
       expectedEnvironment: customer.expectedEnvironment,
       technicalOwner: customer.technicalOwner,
       notes: customer.notes,
-      contacts: (customer.contacts ?? []).map((contact) => this.toContactResponse(contact)),
-      timeline: (customer.timeline ?? []).map((entry) => this.toTimelineResponse(entry)),
-      contracts: (customer.contracts ?? []).map((contract) => this.toContractResponse(contract)),
+      contacts: (customer.contacts ?? []).map((contact) =>
+        this.toContactResponse(contact),
+      ),
+      timeline: (customer.timeline ?? []).map((entry) =>
+        this.toTimelineResponse(entry),
+      ),
+      contracts: (customer.contracts ?? []).map((contract) => ({
+        ...this.toContractResponse(contract),
+        currentPlan: currentPlans.get(contract.id) ?? null,
+      })),
       createdAt: customer.createdAt,
       updatedAt: customer.updatedAt,
     };

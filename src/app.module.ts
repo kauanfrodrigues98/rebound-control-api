@@ -1,3 +1,6 @@
+import { CloudBillingModule } from './cloud-billing/cloud-billing.module';
+import { BillingControlModule } from './billing/billing-control.module';
+import { RequestModule } from './requests/request.module';
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
@@ -10,6 +13,8 @@ import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
+    CloudBillingModule,
+    RequestModule,
     ThrottlerModule.forRoot([
       {
         ttl: 60_000,
@@ -20,6 +25,7 @@ import { CustomersModule } from './customers/customers.module';
     AuthModule,
     LicensingControlModule,
     CustomersModule,
+    BillingControlModule,
   ],
   controllers: [AppController],
   providers: [AppService],
