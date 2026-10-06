@@ -146,6 +146,7 @@ export interface ContractRevisionRepositoryPort {
     actorId: string,
     key: string,
     hash: string,
+    allowHistoricalEffectiveAt?: boolean,
   ): Promise<ContractRevision>;
   current(contractId: string): Promise<ContractRevision | null>;
   claim(id?: string): Promise<ContractRevision | null>;

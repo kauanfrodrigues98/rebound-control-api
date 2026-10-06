@@ -177,6 +177,55 @@ export class ContractCommercialService {
       (await this.revisions.byId(contractId, row.id)) ?? row,
     );
   }
+  async publishConfirmedSnapshot(
+    customerId: string,
+    contractId: string,
+    target: unknown,
+    actorId: string,
+    key: string,
+  ) {
+    await this.revisions.contract(uuid(customerId), uuid(contractId));
+    uuid(actorId);
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(key))
+      throw new BadRequestException('Chave inválida.');
+    const parsed = contractSnapshotSchema.safeParse({
+      ...(target as Record<string, unknown>),
+      sourceRevisionId: '00000000-0000-4000-8000-000000000000',
+      sourceVersion: 1,
+    });
+    if (
+      !parsed.success ||
+      parsed.data.customerId !== customerId ||
+      parsed.data.contractId !== contractId
+    )
+      throw new BadRequestException('Condições inválidas.');
+    const { sourceRevisionId, sourceVersion, ...snapshot } = parsed.data;
+    const hash = createHash('sha256')
+      .update(JSON.stringify(snapshot))
+      .digest('hex');
+    const prior = await this.revisions.byKey(contractId, key);
+    if (prior) {
+      if (prior.requestHash !== hash)
+        throw new ConflictException('Chave já utilizada para outro snapshot.');
+      if (prior.status !== 'synced') await this.deliver(prior.id);
+      return revisionResponse(
+        (await this.revisions.byId(contractId, prior.id))!,
+      );
+    }
+    const row = await this.revisions.save(
+      customerId,
+      contractId,
+      snapshot,
+      actorId,
+      key,
+      hash,
+      true, // Honor the recorded payment/scheduled date after integration recovery.
+    );
+    await this.deliver(row.id);
+    return revisionResponse(
+      (await this.revisions.byId(contractId, row.id)) ?? row,
+    );
+  }
   async sync(customerId: string, contractId: string, revisionId: string) {
     await this.revisions.contract(uuid(customerId), uuid(contractId));
     uuid(revisionId);

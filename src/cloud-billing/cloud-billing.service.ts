@@ -1,3 +1,6 @@
+import { signReceipt, receiptSecret, archiveReceipt } from './erasure-receipt';
+import { ContractTerminationService } from '../commercial/application/contract-termination.service';
+import { CloudPlanChangeService } from './cloud-plan-change.service';
 import {
   Injectable,
   BadRequestException,
@@ -17,6 +20,8 @@ export interface Plan {
   id: string;
   name: string;
   active: boolean;
+  cadence: string;
+  deployment: 'cloud' | 'self_hosted';
   entitlements: Record<string, string | number | boolean>;
 }
 export interface Price {
@@ -49,17 +54,90 @@ export class CloudBillingService {
     private readonly commercial: ContractCommercialService,
     private readonly recurrence: ContractRecurrenceService,
     private readonly financial: ContractFinancialService,
+    private readonly changes: CloudPlanChangeService,
+    private readonly terminations: ContractTerminationService,
   ) {}
+  async terminate(accountUuid: string, body: unknown, key: string) {
+    const row = await this.binding(accountUuid);
+    return this.terminations.request(
+      row.customer_id,
+      row.contract_id,
+      body,
+      actor,
+      key,
+    );
+  }
+  async erasureLedger(after?: string) {
+    receiptSecret();
+    if (after && !z.string().uuid().safeParse(after).success)
+      throw new BadRequestException('Cursor inválido.');
+    const rows = await this.source.query(
+      `SELECT b.account_uuid,t.id,t.effective_at,t.operational_retention_until,t.operational_erased_at
+      FROM control.contract_terminations t JOIN control.cloud_billing_bindings b ON b.contract_id=t.contract_id
+      WHERE t.operational_erased_at IS NOT NULL AND ($1::uuid IS NULL OR b.account_uuid>$1::uuid)
+      ORDER BY b.account_uuid LIMIT 250`,
+      [after ?? null],
+    );
+    const records = rows.map(
+      (r: {
+        account_uuid: string;
+        id: string;
+        effective_at: Date;
+        operational_retention_until: Date;
+        operational_erased_at: Date;
+      }) =>
+        signReceipt({
+          version: 1,
+          accountUuid: r.account_uuid,
+          terminationId: r.id,
+          effectiveAt: r.effective_at.toISOString(),
+          preserveUntil: r.operational_retention_until.toISOString(),
+          erasedAt: r.operational_erased_at.toISOString(),
+        }),
+    );
+    return {
+      records,
+      nextCursor:
+        rows.length === 250 ? rows[rows.length - 1].account_uuid : null,
+    };
+  }
+  async confirmDataErasure(accountUuid: string, body: unknown) {
+    const parsed = z
+      .object({ terminationId: z.string().uuid() })
+      .strict()
+      .safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Confirmação inválida.');
+    const binding = await this.binding(accountUuid);
+    const rows = await this.source.query(
+      `WITH confirmed AS (UPDATE control.contract_terminations SET operational_erased_at=coalesce(operational_erased_at,now())
+      WHERE contract_id=$1 AND id=$2 AND status='completed' AND billing_synced_at IS NOT NULL
+      AND licensing_synced_at IS NOT NULL AND operational_retention_days=30
+      AND operational_retention_until>=effective_at+interval '30 days'
+      AND operational_retention_until<=now() RETURNING id,effective_at,operational_retention_until,operational_erased_at) SELECT * FROM confirmed`,
+      [binding.contract_id, parsed.data.terminationId],
+    );
+    if (!rows.length)
+      throw new ConflictException('Encerramento não elegível para exclusão.');
+    const row = rows[0];
+    await archiveReceipt(
+      signReceipt({
+        version: 1,
+        accountUuid,
+        terminationId: row.id,
+        effectiveAt: row.effective_at.toISOString(),
+        preserveUntil: row.operational_retention_until.toISOString(),
+        erasedAt: row.operational_erased_at.toISOString(),
+      }),
+    );
+    return { confirmed: true };
+  }
   async plans() {
-    const allowed = env.CLOUD_SELF_SERVICE_PLAN_IDS.split(',')
-      .map((v) => v.trim())
-      .filter(Boolean);
     const catalog = await this.licensing.request<{ plans: Plan[] }>(
       '/admin/licenses/plans',
     );
     const result: Array<Plan & { price: Price }> = [];
     for (const plan of catalog.plans) {
-      if (!plan.active || !allowed.includes(plan.id)) continue;
+      if (!plan.active || plan.deployment !== 'cloud') continue;
       const prices = await this.billing.request<{ current: Price | null }>(
         `/commercial/plans/${encodeURIComponent(plan.id)}/prices`,
       );
@@ -236,12 +314,20 @@ export class CloudBillingService {
     await this.recurrence.process(row.customer_id, row.contract_id);
     return this.state(accountUuid);
   }
-  async state(accountUuid: string) {
+  async renew(accountUuid: string, body: unknown) {
     const row = await this.binding(accountUuid);
-    const [commercial, recurrence, financial] = await Promise.all([
+    return this.financial.renew(row.customer_id, row.contract_id, body, actor);
+  }
+  async state(accountUuid: string) {
+    await this.changes.processAccount(accountUuid);
+    const row = await this.binding(accountUuid);
+    const financial = await this.financial.process(
+      row.customer_id,
+      row.contract_id,
+    );
+    const [commercial, recurrence] = await Promise.all([
       this.commercial.list(row.customer_id, row.contract_id),
       this.recurrence.get(row.customer_id, row.contract_id),
-      this.financial.get(row.customer_id, row.contract_id),
     ]);
     return {
       customerId: row.customer_id,
@@ -249,6 +335,12 @@ export class CloudBillingService {
       current: commercial.current,
       recurrence,
       financial: financial.financial,
+      access: financial.access,
+      planChange: await this.changes.latest(accountUuid),
+      termination: await this.terminations.get(
+        row.customer_id,
+        row.contract_id,
+      ),
     };
   }
   async portal(accountUuid: string) {
@@ -258,7 +350,7 @@ export class CloudBillingService {
       { method: 'POST', actorId: actor, body: { expiresInHours: 24 } },
     );
   }
-  async change(accountUuid: string, body: unknown, key: string) {
+  async previewChange(accountUuid: string, body: unknown) {
     const parsed = z
       .object({
         planId: z
@@ -268,66 +360,47 @@ export class CloudBillingService {
       })
       .strict()
       .safeParse(body);
-    if (!parsed.success || !/^[A-Za-z0-9._:-]{1,80}$/.test(key ?? ''))
-      throw new BadRequestException('Plano ou chave inválida.');
-    const row = await this.binding(accountUuid),
-      catalog = await this.plans(),
-      plan = catalog.plans.find((v) => v.id === parsed.data.planId);
+    if (!parsed.success) throw new BadRequestException('Plano inválido.');
+    const row = await this.binding(accountUuid);
+    const catalog = await this.plans();
+    const plan = catalog.plans.find((value) => value.id === parsed.data.planId);
     if (!plan)
       throw new BadRequestException(
-        'Plano não disponível para contratação cloud.',
+        'Plano não disponível para contratação Cloud.',
       );
-    const state = await this.state(accountUuid);
-    if (
-      !state.current ||
-      state.current.status !== 'synced' ||
-      !state.recurrence?.nextCycleOn
-    )
-      throw new ConflictException('Recorrência não está disponível.');
-    const payload = await this.source.transaction(async (tx) => {
-      await tx.query(
-        `SELECT id FROM control.customer_contracts WHERE id=$1 FOR UPDATE`,
-        [row.contract_id],
-      );
-      const [prior] = await tx.query<
-        Array<{ plan_id: string; payload: unknown }>
-      >(
-        'SELECT plan_id,payload FROM control.cloud_plan_changes WHERE account_uuid=$1 AND request_key=$2',
-        [accountUuid, key],
-      );
-      if (prior) {
-        if (prior.plan_id !== plan.id)
-          throw new ConflictException('Chave já usada para outro plano.');
-        return prior.payload;
-      }
-      const value = {
-        planId: plan.id,
-        pricing: 'catalog',
-        priceVersionId: plan.price.id,
-        setupAmount: 0,
-        dueDay: state.current!.terms.dueDay,
-        allowedMethods: state.current!.terms.allowedMethods,
-        startsOn: state.current!.terms.startsOn,
-        endsOn: state.current!.terms.endsOn,
-        effectiveAt: new Date(
-          `${state.recurrence!.nextCycleOn}T00:00:00.000-03:00`,
-        ).toISOString(),
-        overrides: {},
-        reason:
-          'Alteração de plano solicitada no painel cloud para o próximo ciclo',
-      };
-      await tx.query(
-        'INSERT INTO control.cloud_plan_changes(account_uuid,request_key,plan_id,payload) VALUES($1,$2,$3,$4)',
-        [accountUuid, key, plan.id, JSON.stringify(value)],
-      );
-      return value;
-    });
-    return this.commercial.publish(
-      row.customer_id,
-      row.contract_id,
-      payload,
-      actor,
-      `cloud-plan:${key}`,
+    return (await this.changes.preview(row, plan)).quote;
+  }
+  async cancelChange(accountUuid: string, id: string) {
+    await this.binding(accountUuid);
+    return this.changes.cancel(accountUuid, id);
+  }
+  async change(accountUuid: string, body: unknown, key: string) {
+    const parsed = z
+      .object({
+        planId: z
+          .string()
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .max(80),
+        expectedAmount: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .safeParse(body);
+    if (!parsed.success || !/^[A-Za-z0-9._:-]{1,80}$/.test(key ?? ''))
+      throw new BadRequestException('Plano ou chave inválida.');
+    const row = await this.binding(accountUuid);
+    const replay = await this.changes.replay(
+      accountUuid,
+      key,
+      parsed.data.planId,
+      parsed.data.expectedAmount,
     );
+    if (replay) return replay;
+    const catalog = await this.plans();
+    const plan = catalog.plans.find((value) => value.id === parsed.data.planId);
+    if (!plan)
+      throw new BadRequestException(
+        'Plano não disponível para contratação Cloud.',
+      );
+    return this.changes.start(row, plan, key, parsed.data.expectedAmount);
   }
 }

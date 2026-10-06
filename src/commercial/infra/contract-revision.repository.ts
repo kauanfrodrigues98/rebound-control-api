@@ -66,6 +66,7 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
     actorId: string,
     key: string,
     hash: string,
+    allowHistoricalEffectiveAt = false,
   ) {
     return this.source.transaction(async (manager) => {
       const [contract] = await manager.query<ContractReference[]>(
@@ -82,6 +83,14 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
           throw new ConflictException('Chave utilizada para outras condições.');
         return existing;
       }
+      const [termination] = await manager.query(
+        'SELECT id FROM control.contract_terminations WHERE contract_id=$1',
+        [contractId],
+      );
+      if (termination)
+        throw new ConflictException(
+          'Contrato com encerramento solicitado não aceita novas condições.',
+        );
       if (['encerrado', 'cancelado'].includes(contract.status))
         throw new ConflictException(
           'Contrato encerrado ou cancelado não aceita novas condições.',
@@ -104,7 +113,7 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
       );
       const at = new Date(input.effectiveAt).getTime();
       if (
-        at < Date.now() - 60000 ||
+        (!allowHistoricalEffectiveAt && at < Date.now() - 60000) ||
         (latestActive &&
           at <= new Date(latestActive.payload.effectiveAt).getTime())
       )
@@ -143,7 +152,7 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
         [id ?? null],
       );
       if (!candidate) return null;
-      const [claimed] = await manager.query<ContractRevision[]>(
+      const [[claimed]] = await manager.query<[ContractRevision[], number]>(
         `UPDATE control.contract_commercial_revisions SET claim_id=$2, lease_until=now()+interval '2 minutes', attempts=attempts+1 WHERE id=$1 RETURNING ${columns}`,
         [candidate.id, randomUUID()],
       );

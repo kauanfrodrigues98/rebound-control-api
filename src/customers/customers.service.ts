@@ -100,12 +100,16 @@ export class CustomersService {
       order: { updatedAt: 'DESC' },
     });
 
-    return customers.map((customer) => this.toResponse(customer));
+    const currentPlans = await this.currentContractPlans(customers);
+    return customers.map((customer) => this.toResponse(customer, currentPlans));
   }
 
   async getById(id: string) {
     const customer = await this.findById(id);
-    return this.toResponse(customer);
+    return this.toResponse(
+      customer,
+      await this.currentContractPlans([customer]),
+    );
   }
 
   async create(body: CreateCustomerBody) {
@@ -249,6 +253,16 @@ export class CustomersService {
       if (!contract) throw new NotFoundException('Contrato não encontrado.');
 
       this.validateContractUpdate(contract, body);
+      if (body.status === 'encerrado') {
+        const [enrollment] = await manager.query(
+          'SELECT id FROM control.contract_billing_enrollments WHERE contract_id=$1',
+          [contractId],
+        );
+        if (enrollment)
+          throw new BadRequestException(
+            'Use Encerrar contrato no faturamento para coordenar o fim do período pago.',
+          );
+      }
       if (
         this.hasActiveContractDataChanges(contract, body) &&
         (await this.commercial.hasVersions(contractId))
@@ -541,7 +555,38 @@ export class CustomersService {
     };
   }
 
-  private toResponse(customer: CustomerOrmEntity) {
+  private async currentContractPlans(customers: CustomerOrmEntity[]) {
+    const contractIds = customers.flatMap((customer) =>
+      (customer.contracts ?? []).map((contract) => contract.id),
+    );
+    if (!contractIds.length)
+      return new Map<string, { id: string; name: string }>();
+    const rows = await this.dataSource.query<
+      Array<{ contractId: string; planId: string; planName: string | null }>
+    >(
+      `SELECT DISTINCT ON (contract_id) contract_id AS "contractId",
+       payload->>'planId' AS "planId", payload->'entitlements'->>'planName' AS "planName"
+       FROM control.contract_commercial_revisions
+       WHERE contract_id=ANY($1::uuid[]) AND status='synced' AND cancelled_at IS NULL
+       AND (payload->>'effectiveAt')::timestamptz<=now()
+       ORDER BY contract_id,source_version DESC`,
+      [contractIds],
+    );
+    return new Map(
+      rows.map((row) => [
+        row.contractId,
+        {
+          id: row.planId,
+          name: row.planName ?? row.planId,
+        },
+      ]),
+    );
+  }
+
+  private toResponse(
+    customer: CustomerOrmEntity,
+    currentPlans = new Map<string, { id: string; name: string }>(),
+  ) {
     return {
       id: customer.id,
       name: customer.name,
@@ -563,9 +608,10 @@ export class CustomersService {
       timeline: (customer.timeline ?? []).map((entry) =>
         this.toTimelineResponse(entry),
       ),
-      contracts: (customer.contracts ?? []).map((contract) =>
-        this.toContractResponse(contract),
-      ),
+      contracts: (customer.contracts ?? []).map((contract) => ({
+        ...this.toContractResponse(contract),
+        currentPlan: currentPlans.get(contract.id) ?? null,
+      })),
       createdAt: customer.createdAt,
       updatedAt: customer.updatedAt,
     };

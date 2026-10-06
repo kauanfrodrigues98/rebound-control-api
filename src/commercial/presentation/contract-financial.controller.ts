@@ -1,5 +1,8 @@
+import { CurrentUser } from '../../infra/security/current-user.decorator';
+import type { CurrentControlUser } from '../../infra/security/current-control-user';
 import {
   Controller,
+  Body,
   Get,
   Post,
   Param,
@@ -18,6 +21,22 @@ import { ContractFinancialService } from '../application/contract-financial.serv
 )
 export class ContractFinancialController {
   constructor(private readonly service: ContractFinancialService) {}
+  @Post('suspension-policy') policy(
+    @Param('customerId', new ParseUUIDPipe()) customer: string,
+    @Param('contractId', new ParseUUIDPipe()) contract: string,
+    @Body() body: unknown,
+    @CurrentUser() actor: CurrentControlUser,
+  ) {
+    return this.service.suspensionPolicy(customer, contract, body, actor.id);
+  }
+  @Post('renewal') renew(
+    @Param('customerId', new ParseUUIDPipe()) customer: string,
+    @Param('contractId', new ParseUUIDPipe()) contract: string,
+    @Body() body: unknown,
+    @CurrentUser() actor: CurrentControlUser,
+  ) {
+    return this.service.renew(customer, contract, body, actor.id);
+  }
   @Get() get(
     @Param('customerId', new ParseUUIDPipe()) customer: string,
     @Param('contractId', new ParseUUIDPipe()) contract: string,

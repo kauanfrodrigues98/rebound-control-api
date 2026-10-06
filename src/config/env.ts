@@ -44,18 +44,28 @@ const envSchema = z.object({
   COOKIE_DOMAIN: z.string().optional(),
   COOKIE_SECURE: booleanFromEnv.default(false),
 
+  SELF_HOSTED_REQUEST_EMAIL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.email().optional(),
+  ),
+  MAIL_SMTP_HOST: z.string().optional(),
+  MAIL_SMTP_PORT: z.coerce.number().int().positive().default(587),
+  MAIL_SMTP_SECURE: booleanFromEnv.default(false),
+  MAIL_SMTP_USER: z.string().optional(),
+  MAIL_SMTP_PASSWORD: z.string().optional(),
+  MAIL_FROM_ADDRESS: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.email().optional(),
+  ),
+
   CONTROL_ADMIN_EMAIL: z.string().email().optional(),
   CONTROL_ADMIN_SETUP_TOKEN: z.string().min(24).optional(),
   CONTROL_ADMIN_NAME: z.string().min(1).default('Administrador Rebound'),
 
   CONTROL_CLOUD_API_KEY: z.string().min(32).optional(),
-  CLOUD_SELF_SERVICE_PLAN_IDS: z
-    .string()
-    .default('free,individual,team,enterprise'),
   CLOUD_DEFAULT_PLAN_ID: z.string().default('free'),
   CONTRACT_FINANCIAL_SYNC_ENABLED: booleanFromEnv.default(false),
   FINANCIAL_SUSPENSION_ENABLED: booleanFromEnv.default(false),
-  FINANCIAL_GRACE_DAYS: z.coerce.number().int().min(1).max(30).default(7),
   CONTRACT_RECURRENCE_ENABLED: booleanFromEnv.default(false),
   CONTRACT_COMMERCIAL_SYNC_ENABLED: booleanFromEnv.default(false),
 

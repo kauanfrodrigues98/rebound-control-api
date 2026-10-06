@@ -138,7 +138,27 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         throw new ConflictException(
           'Contrato não está ativo; nenhuma competência será gerada.',
         );
+      const [termination] = await manager.query<{ effective_at: Date }[]>(
+        'SELECT effective_at FROM control.contract_terminations WHERE contract_id=$1',
+        [contractId],
+      );
+      if (
+        termination &&
+        (!row.nextCycleOn ||
+          new Date(`${row.nextCycleOn}T00:00:00.000-03:00`) >=
+            termination.effective_at)
+      )
+        return row;
       if (!row.enabled || !row.nextCycleOn) return row;
+      const [decision] = await manager.query(
+        'SELECT payload FROM control.financial_decisions WHERE contract_id=$1 ORDER BY source_version DESC LIMIT 1',
+        [contractId],
+      );
+      if (
+        decision?.payload.recurrenceState &&
+        decision.payload.recurrenceState !== 'active'
+      )
+        return row;
       const [current] = await manager.query<ContractRevision[]>(
         `SELECT ${currentColumns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1`,
         [contractId],
@@ -159,13 +179,13 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         const ack = await action(row, current, periodRevisionId);
         if (row.billingScheduleId && row.billingScheduleId !== ack.scheduleId)
           throw new ConflictException('Identidade da recorrência divergente.');
-        const [updated] = await manager.query<ContractEnrollment[]>(
+        const [[updated]] = await manager.query<[ContractEnrollment[], number]>(
           `UPDATE control.contract_billing_enrollments SET billing_schedule_id=$2,next_cycle_on=$3,last_invoice_id=COALESCE($4,last_invoice_id),last_error=NULL,next_attempt_at=now()+interval '1 minute' WHERE id=$1 RETURNING ${columns}`,
           [row.id, ack.scheduleId, ack.nextCycleOn, ack.invoiceId],
         );
         return updated;
       } catch {
-        const [pending] = await manager.query<ContractEnrollment[]>(
+        const [[pending]] = await manager.query<[ContractEnrollment[], number]>(
           `UPDATE control.contract_billing_enrollments SET last_error='billing_pending',next_attempt_at=now()+interval '5 minutes' WHERE id=$1 RETURNING ${columns}`,
           [row.id],
         );
@@ -188,7 +208,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
       if (!contract) throw new NotFoundException('Contrato não encontrado.');
       if (enabled && contract.status !== 'ativo')
         throw new ConflictException('Contrato não está ativo.');
-      const [row] = await manager.query<ContractEnrollment[]>(
+      const [[row]] = await manager.query<[ContractEnrollment[], number]>(
         `UPDATE control.contract_billing_enrollments SET enabled=$3,next_attempt_at=now() WHERE contract_id=$1 AND customer_id=$2 RETURNING ${columns}`,
         [contractId, customerId, enabled],
       );
@@ -209,7 +229,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
   }
   due() {
     return this.source.query<Array<{ customerId: string; contractId: string }>>(
-      `SELECT e.customer_id AS "customerId",e.contract_id AS "contractId" FROM control.contract_billing_enrollments e JOIN control.customer_contracts c ON c.id=e.contract_id WHERE c.status='ativo' AND e.enabled AND e.next_cycle_on<=(now() AT TIME ZONE 'America/Recife')::date AND e.next_attempt_at<=now() ORDER BY e.next_attempt_at,e.contract_id LIMIT 10`,
+      `SELECT e.customer_id AS "customerId",e.contract_id AS "contractId" FROM control.contract_billing_enrollments e JOIN control.customer_contracts c ON c.id=e.contract_id WHERE c.status='ativo' AND e.enabled AND NOT EXISTS(SELECT 1 FROM control.financial_decisions f WHERE f.contract_id=c.id AND f.source_version=(SELECT max(g.source_version) FROM control.financial_decisions g WHERE g.contract_id=c.id) AND f.payload->>'recurrenceState' IN ('paused','renewal_required')) AND NOT EXISTS(SELECT 1 FROM control.contract_terminations t WHERE t.contract_id=c.id AND (e.next_cycle_on::timestamp AT TIME ZONE 'America/Recife')>=t.effective_at) AND e.next_cycle_on<=(now() AT TIME ZONE 'America/Recife')::date AND e.next_attempt_at<=now() ORDER BY e.next_attempt_at,e.contract_id LIMIT 10`,
     );
   }
 }
