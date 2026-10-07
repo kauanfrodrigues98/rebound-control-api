@@ -23,6 +23,7 @@ interface Plan {
   id: string;
   name: string;
   cadence: string;
+  deployment: 'cloud' | 'self_hosted';
   active: boolean;
   entitlements: Record<string, boolean | number | string>;
 }
@@ -98,6 +99,14 @@ export class ContractCommercialService {
         throw new ConflictException('Chave utilizada para outras condições.');
       return revisionResponse(existing);
     }
+    if (
+      input.billingMode === 'courtesy' &&
+      input.courtesyExpiresAt &&
+      new Date(input.courtesyExpiresAt) <= new Date()
+    )
+      throw new BadRequestException(
+        'A validade da nova cortesia deve ser futura.',
+      );
     const catalog = await this.licensing.request<{ plans: Plan[] }>(
       '/admin/licenses/plans?includeArchived=true',
     );
@@ -129,6 +138,10 @@ export class ContractCommercialService {
       contractId,
       planId: plan.id,
       pricing: input.pricing,
+      ...(input.billingMode ? { billingMode: input.billingMode } : {}),
+      ...(input.courtesyExpiresAt !== undefined
+        ? { courtesyExpiresAt: input.courtesyExpiresAt }
+        : {}),
       priceVersionId: input.priceVersionId,
       amount,
       intervalMonths,
@@ -146,6 +159,7 @@ export class ContractCommercialService {
         planId: plan.id,
         planName: plan.name,
         cadence: plan.cadence,
+        deployment: plan.deployment,
       },
     };
     const validation = contractSnapshotSchema.safeParse({
@@ -226,6 +240,49 @@ export class ContractCommercialService {
       (await this.revisions.byId(contractId, row.id)) ?? row,
     );
   }
+  async endCourtesy(
+    customerId: string,
+    contractId: string,
+    body: unknown,
+    actorId: string,
+    key: string,
+  ) {
+    const input = z
+      .object({ reason: z.string().trim().min(3).max(1000) })
+      .strict()
+      .safeParse(body);
+    if (!input.success || !/^[A-Za-z0-9._:-]{1,128}$/.test(key))
+      throw new BadRequestException('Motivo ou chave inválidos.');
+    await this.revisions.contract(uuid(customerId), uuid(contractId));
+    const prior = await this.revisions.byKey(contractId, key);
+    if (prior) {
+      if (
+        prior.payload.reason !== input.data.reason ||
+        prior.payload.courtesyExpiresAt !== prior.payload.effectiveAt
+      )
+        throw new ConflictException('Chave utilizada em outra operação.');
+      if (prior.status !== 'synced') await this.deliver(prior.id);
+      return revisionResponse(
+        (await this.revisions.byId(contractId, prior.id)) ?? prior,
+      );
+    }
+    const current = await this.revisions.current(contractId);
+    if (!current || current.payload.billingMode !== 'courtesy')
+      throw new ConflictException('Contrato sem cortesia vigente.');
+    const now = new Date().toISOString();
+    return this.publishConfirmedSnapshot(
+      customerId,
+      contractId,
+      {
+        ...current.payload,
+        effectiveAt: now,
+        courtesyExpiresAt: now,
+        reason: input.data.reason,
+      },
+      actorId,
+      key,
+    );
+  }
   async sync(customerId: string, contractId: string, revisionId: string) {
     await this.revisions.contract(uuid(customerId), uuid(contractId));
     uuid(revisionId);
@@ -295,6 +352,7 @@ export class ContractCommercialService {
       financiallyVerifiedUntil: paid?.validUntil ?? null,
       entitlements: {
         ...licensed.entitlements,
+        courtesy: licensed.billingMode === 'courtesy',
         commercialRevisionId: licensed.sourceRevisionId,
         commercialVersion: licensed.sourceVersion,
       },

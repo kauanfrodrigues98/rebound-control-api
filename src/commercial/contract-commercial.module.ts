@@ -1,3 +1,4 @@
+import { ContractCourtesyExpiryService } from './application/contract-courtesy-expiry.service';
 import { ContractCancellationService } from './application/contract-cancellation.service';
 import { ContractFinancialService } from './application/contract-financial.service';
 import { FinancialNoticeWorker } from './application/financial-notice.worker';
@@ -31,6 +32,7 @@ import { ContractCommercialController } from './presentation/contract-commercial
     ContractRecurrenceController,
   ],
   providers: [
+    ContractCourtesyExpiryService,
     ContractTerminationEmailWorker,
     ContractTerminationService,
     ContractTerminationWorker,

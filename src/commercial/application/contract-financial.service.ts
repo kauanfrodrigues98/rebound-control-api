@@ -23,6 +23,17 @@ export const financialStateSchema = z
     paidThrough: z.iso.date().nullable(),
     paidInvoiceId: z.uuid().nullable(),
     paidTerms: contractSnapshotSchema.nullable(),
+    accessTerms: contractSnapshotSchema.nullable().optional(),
+    accessUntil: z.iso.datetime({ offset: true }).nullable().optional(),
+    courtesy: z
+      .object({
+        active: z.boolean(),
+        expiresAt: z.iso.datetime({ offset: true }).nullable(),
+        reason: z.string(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     suspensionBillingPolicy: z.enum(['pause', 'continue']).optional(),
     renewalPaidOn: z.iso.date().nullable().optional(),
     recurrenceState: z
@@ -51,6 +62,26 @@ export class ContractFinancialService {
     private readonly licensing: LicensingAdminClient,
   ) {}
   async licensePeriod(customerId: string, contractId: string) {
+    const [revision] = await this.source.query<Array<{ payload: unknown }>>(
+      "SELECT payload FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1",
+      [contractId],
+    );
+    if (
+      revision &&
+      contractSnapshotSchema.parse(revision.payload).billingMode === 'courtesy'
+    ) {
+      const { financial } = await this.get(customerId, contractId);
+      if (
+        !financial.courtesy?.active ||
+        !financial.accessTerms ||
+        !financial.accessUntil
+      )
+        throw new ConflictException('Cortesia encerrada.');
+      return {
+        terms: financial.accessTerms,
+        validUntil: financial.accessUntil,
+      };
+    }
     const [row] = await this.source.query<Array<{ id: string }>>(
       'SELECT id FROM control.contract_billing_enrollments WHERE contract_id=$1',
       [contractId],
@@ -118,6 +149,17 @@ export class ContractFinancialService {
     } as z.infer<typeof financialStateSchema>;
   }
   private access(financial: z.infer<typeof financialStateSchema>) {
+    if (financial.courtesy) {
+      const state = financial.courtesy.active
+        ? ('healthy' as const)
+        : ('payment_suspended' as const);
+      return {
+        ...financialAccess(null, true),
+        state,
+        effectiveState: state,
+        renewalRequired: false,
+      };
+    }
     const access = financialAccess(
       financial.overdueSince,
       env.FINANCIAL_SUSPENSION_ENABLED,
@@ -133,13 +175,17 @@ export class ContractFinancialService {
   }
   private core(financial: z.infer<typeof financialStateSchema>) {
     const access = this.access(financial);
-    const validUntil = financial.paidThrough
-      ? new Date(`${financial.paidThrough}T00:00:00.000-03:00`).toISOString()
-      : null;
+    const grant = financial.accessTerms ?? financial.paidTerms;
+    const validUntil =
+      financial.accessUntil ??
+      (financial.paidThrough
+        ? new Date(`${financial.paidThrough}T00:00:00.000-03:00`).toISOString()
+        : null);
     return {
       suspensionBillingPolicy: financial.suspensionBillingPolicy ?? 'pause',
-      recurrenceState:
-        financial.suspensionBillingPolicy === 'continue'
+      recurrenceState: financial.courtesy
+        ? 'paused'
+        : financial.suspensionBillingPolicy === 'continue'
           ? 'active'
           : access.renewalRequired
             ? 'renewal_required'
@@ -154,12 +200,13 @@ export class ContractFinancialService {
       overdueSince: access.overdueSince,
       enforcementEnabled: access.enforcementEnabled,
       validUntil,
-      graceDays: FINANCIAL_SUSPEND_AFTER_DAYS,
-      entitlements: financial.paidTerms
+      graceDays: financial.courtesy ? 0 : FINANCIAL_SUSPEND_AFTER_DAYS,
+      entitlements: grant
         ? {
-            ...financial.paidTerms.entitlements,
-            commercialRevisionId: financial.paidTerms.sourceRevisionId,
-            commercialVersion: financial.paidTerms.sourceVersion,
+            ...grant.entitlements,
+            courtesy: !!financial.courtesy,
+            commercialRevisionId: grant.sourceRevisionId,
+            commercialVersion: grant.sourceVersion,
             financialManaged: true,
             financialAccessState: access.effectiveState,
             financialOverdueSince: access.overdueSince ?? '',
@@ -199,7 +246,7 @@ export class ContractFinancialService {
       );
       // Persist access even before the first payment. Never invent paid license entitlements.
       const licenseDeliverable =
-        !!financial.paidTerms &&
+        !!(financial.accessTerms ?? financial.paidTerms) &&
         !!core.validUntil &&
         (core.state === 'suspended' ||
           core.accessState !== 'healthy' ||
@@ -435,6 +482,10 @@ export class ContractFinancialService {
       if (termination)
         throw new ConflictException('Contrato com encerramento solicitado.');
       const financial = await this.observe(customerId, contractId, tx);
+      if (financial.courtesy)
+        throw new ConflictException(
+          'Cortesia não permite cobrança de retomada.',
+        );
       if (
         financial.overdueSince ||
         financial.recurrenceState !== 'renewal_required'
@@ -502,7 +553,7 @@ export class ContractFinancialService {
     const rows = await this.source.query<
       Array<{ customer_id: string; contract_id: string }>
     >(
-      `SELECT e.customer_id,e.contract_id FROM control.contract_billing_enrollments e JOIN control.customer_contracts c ON c.id=e.contract_id WHERE c.status='ativo' AND e.contract_id>$1 ORDER BY e.contract_id LIMIT 25`,
+      `SELECT c.customer_id,c.id AS contract_id FROM control.customer_contracts c JOIN LATERAL (SELECT payload FROM control.contract_commercial_revisions r WHERE r.contract_id=c.id AND r.cancelled_at IS NULL AND (r.payload->>'effectiveAt')::timestamptz<=now() ORDER BY source_version DESC LIMIT 1) r ON true LEFT JOIN control.contract_billing_enrollments e ON e.contract_id=c.id WHERE c.status='ativo' AND (e.id IS NOT NULL OR r.payload->>'billingMode'='courtesy') AND c.id>$1 ORDER BY c.id LIMIT 25`,
       [this.cursor],
     );
     if (!rows.length) this.cursor = '00000000-0000-0000-0000-000000000000';

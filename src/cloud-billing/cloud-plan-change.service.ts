@@ -133,6 +133,10 @@ export class CloudPlanChangeService {
     )
       throw new ConflictException('Recorrência ou condições pendentes.');
     const base = current.terms;
+    if (base.billingMode === 'courtesy')
+      throw new ConflictException(
+        'Sua conta está em cortesia. Fale com nosso time para encerrar a concessão antes de contratar outro plano.',
+      );
     const target: Target = {
       customerId: binding.customer_id,
       contractId: binding.contract_id,

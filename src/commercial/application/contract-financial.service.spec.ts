@@ -1,3 +1,4 @@
+import type { ContractSnapshot } from '../domain/contract-terms';
 import { ContractFinancialService } from './contract-financial.service';
 import { env } from '../../config/env';
 
@@ -147,5 +148,69 @@ describe('financial lifecycle delivery', () => {
       expect.stringContaining("last_error='financial_lifecycle_pending'"),
       expect.any(Array),
     );
+  });
+});
+
+describe('courtesy financial lifecycle', () => {
+  const terms: ContractSnapshot = {
+    sourceRevisionId: uuid,
+    sourceVersion: 2,
+    customerId,
+    contractId,
+    planId: 'enterprise',
+    pricing: 'custom',
+    priceVersionId: null,
+    billingMode: 'courtesy',
+    courtesyExpiresAt: null,
+    amount: 0,
+    setupAmount: 0,
+    currency: 'BRL',
+    intervalMonths: 1,
+    dueDay: 1,
+    allowedMethods: ['card'],
+    startsOn: '2026-01-01',
+    endsOn: null,
+    effectiveAt: '2026-10-01T00:00:00Z',
+    entitlements: { maxUsers: 'unlimited', aiEnabled: true },
+    reason: 'Parceria',
+  };
+  it('delivers access without recording a payment or forgiving historical debt', async () => {
+    const financial = {
+      ...state(true, false),
+      accessTerms: terms,
+      accessUntil: '2099-01-01T00:00:00Z',
+      courtesy: { active: true, expiresAt: null, reason: 'Parceria' },
+    };
+    const f = fixture([financial]);
+    const result = await f.service.process(customerId, contractId);
+    expect(result.access.effectiveState).toBe('healthy');
+    expect(result.financial.paidTerms).toBeNull();
+    expect(result.financial.overdueSince).toBe(financial.overdueSince);
+    expect(f.current().payload).toMatchObject({
+      recurrenceState: 'paused',
+      graceDays: 0,
+      entitlements: { courtesy: true, maxUsers: 'unlimited' },
+    });
+    expect(f.licensing.request).toHaveBeenCalled();
+  });
+  it('suspends expired courtesy even if there are no debts', async () => {
+    const financial = {
+      ...state(false, false),
+      accessTerms: terms,
+      accessUntil: '2026-01-01T00:00:00Z',
+      courtesy: {
+        active: false,
+        expiresAt: '2026-01-01T00:00:00Z',
+        reason: 'Parceria',
+      },
+    };
+    const f = fixture([financial]);
+    const result = await f.service.process(customerId, contractId);
+    expect(result.access.effectiveState).toBe('payment_suspended');
+    expect(f.current().payload).toMatchObject({
+      state: 'suspended',
+      recurrenceState: 'paused',
+      graceDays: 0,
+    });
   });
 });
