@@ -43,6 +43,22 @@ export class ContractCommercialController {
   ) {
     return this.commercial.publish(customerId, contractId, body, actor.id, key);
   }
+  @Post('courtesy/end')
+  endCourtesy(
+    @Param('customerId', new ParseUUIDPipe()) customerId: string,
+    @Param('contractId', new ParseUUIDPipe()) contractId: string,
+    @Body() body: unknown,
+    @CurrentUser() actor: CurrentControlUser,
+    @Headers('idempotency-key') key: string,
+  ) {
+    return this.commercial.endCourtesy(
+      customerId,
+      contractId,
+      body,
+      actor.id,
+      key,
+    );
+  }
   @Post(':revisionId/cancel') cancel(
     @Param('customerId', new ParseUUIDPipe()) customer: string,
     @Param('contractId', new ParseUUIDPipe()) contract: string,

@@ -11,6 +11,9 @@ export const contractSnapshotSchema = z
       .max(80),
     priceVersionId: z.uuid().nullable(),
     pricing: z.enum(['catalog', 'custom']),
+    billingMode: z.enum(['standard', 'courtesy']).optional(),
+    courtesyExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    courtesyEndedAt: z.iso.datetime({ offset: true }).optional(),
     amount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     setupAmount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     currency: z.literal('BRL'),
@@ -38,6 +41,31 @@ export const contractSnapshotSchema = z
     reason: z.string().trim().min(3).max(1000),
   })
   .strict()
+  .refine(
+    (v) =>
+      v.billingMode !== 'courtesy' ||
+      (v.pricing === 'custom' &&
+        v.amount === 0 &&
+        v.setupAmount === 0 &&
+        (!v.courtesyExpiresAt ||
+          new Date(v.courtesyExpiresAt) >= new Date(v.effectiveAt))),
+    {
+      message:
+        'Cortesia exige preço e implantação zero e validade posterior à concessão.',
+    },
+  )
+  .refine((v) => v.billingMode === 'courtesy' || v.courtesyExpiresAt == null, {
+    message: 'Validade de cortesia inválida.',
+  })
+  .refine(
+    (v) =>
+      !v.courtesyEndedAt ||
+      (v.billingMode === 'standard' &&
+        v.pricing === 'custom' &&
+        v.amount === 0 &&
+        v.setupAmount === 0),
+    { message: 'Retorno de cortesia exige condições gratuitas.' },
+  )
   .refine((v) => !v.endsOn || v.endsOn >= v.startsOn, {
     message: 'Término anterior ao início.',
   })
@@ -57,7 +85,7 @@ export const contractSnapshotSchema = z
 export type ContractSnapshot = z.infer<typeof contractSnapshotSchema>;
 
 const limit = z.union([
-  z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   z.literal('unlimited'),
 ]);
 export const entitlementOverridesSchema = z
@@ -71,12 +99,15 @@ export const entitlementOverridesSchema = z
     supportSlaHours: z.number().int().positive().max(8760).optional(),
     aiEnabled: z.boolean().optional(),
     automaticReplayEnabled: z.boolean().optional(),
+    manualReplayEnabled: z.boolean().optional(),
   })
   .strict();
 export const publishContractTermsSchema = z
   .object({
     planId: contractSnapshotSchema.shape.planId,
     pricing: z.enum(['catalog', 'custom']),
+    billingMode: z.enum(['standard', 'courtesy']).optional(),
+    courtesyExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
     priceVersionId: z.uuid().nullable(),
     amount: z
       .number()

@@ -1,3 +1,4 @@
+import { env } from '../../config/env';
 import {
   ConflictException,
   Injectable,
@@ -113,6 +114,44 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
       );
       const at = new Date(input.effectiveAt).getTime();
       if (
+        input.billingMode === 'courtesy' ||
+        latestActive?.payload.billingMode === 'courtesy'
+      ) {
+        if (contract.status !== 'ativo')
+          throw new ConflictException('Cortesia exige contrato ativo.');
+        if (at > Date.now() + 1000)
+          throw new ConflictException(
+            'Concessão ou encerramento de cortesia deve ser imediato.',
+          );
+        const [pendingChange] = await manager.query<Array<{ id: string }>>(
+          "SELECT id FROM control.cloud_plan_change_requests WHERE contract_id=$1 AND status IN ('requested','awaiting_payment','scheduled','activated') LIMIT 1",
+          [contractId],
+        );
+        if (pendingChange)
+          throw new ConflictException(
+            'Resolva a alteração de plano pendente antes de alterar a cortesia.',
+          );
+        const [cloudBinding] = await manager.query<
+          Array<{ contract_id: string }>
+        >(
+          'SELECT contract_id FROM control.cloud_billing_bindings WHERE contract_id=$1',
+          [contractId],
+        );
+        if (cloudBinding && input.entitlements.deployment !== 'cloud')
+          throw new ConflictException('Conta Cloud exige um plano Cloud.');
+        if (
+          latestActive?.payload.billingMode === 'courtesy' &&
+          input.billingMode !== 'courtesy' &&
+          (!cloudBinding ||
+            input.planId !== env.CLOUD_DEFAULT_PLAN_ID ||
+            input.amount !== 0 ||
+            input.setupAmount !== 0)
+        )
+          throw new ConflictException(
+            'Encerre a cortesia pelo comando específico; Cloud retorna ao Free sem contratação paga.',
+          );
+      }
+      if (
         (!allowHistoricalEffectiveAt && at < Date.now() - 60000) ||
         (latestActive &&
           at <= new Date(latestActive.payload.effectiveAt).getTime())
@@ -140,6 +179,31 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
           actorId,
         ],
       );
+      if (
+        input.billingMode === 'courtesy' ||
+        latestActive?.payload.billingMode === 'courtesy'
+      ) {
+        await manager.query(
+          "INSERT INTO control.customer_timeline_entries(id,customer_id,type,title,description) VALUES($1,$2,'contrato',$3,$4)",
+          [
+            randomUUID(),
+            customerId,
+            input.billingMode === 'courtesy' &&
+            input.courtesyExpiresAt !== input.effectiveAt
+              ? 'Cortesia concedida ou atualizada'
+              : 'Cortesia encerrada',
+            `Contrato ${contractId}. Plano ${input.planId}. Operador ${actorId}. ${input.reason}`,
+          ],
+        );
+        await manager.query(
+          'UPDATE control.customer_contracts SET plan_id=$2,plan=$3 WHERE id=$1',
+          [
+            contractId,
+            input.planId,
+            String(input.entitlements.planName ?? input.planId),
+          ],
+        );
+      }
       return created;
     });
   }

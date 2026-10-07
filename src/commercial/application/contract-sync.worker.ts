@@ -1,3 +1,4 @@
+import { ContractCourtesyExpiryService } from './contract-courtesy-expiry.service';
 import { ContractCancellationService } from './contract-cancellation.service';
 import {
   Injectable,
@@ -14,6 +15,7 @@ export class ContractSyncWorker implements OnModuleInit, OnModuleDestroy {
   private running = false;
   constructor(
     private readonly commercial: ContractCommercialService,
+    private readonly courtesyExpiry: ContractCourtesyExpiryService,
     private readonly cancellations: ContractCancellationService,
   ) {}
   onModuleInit() {
@@ -35,6 +37,7 @@ export class ContractSyncWorker implements OnModuleInit, OnModuleDestroy {
         if (!(await this.cancellations.deliver())) break;
       for (let i = 0; i < 10; i++)
         if (!(await this.commercial.deliver())) break;
+      await this.courtesyExpiry.run();
     } catch {
       this.logger.warn(
         'Falha ao processar a fila de condições comerciais; as revisões permanecem persistidas.',

@@ -73,6 +73,8 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         throw new ConflictException(
           'Confirme as condições vigentes no Billing antes de habilitar recorrência.',
         );
+      if (current.payload.billingMode === 'courtesy')
+        throw new ConflictException('Cortesia não precisa de recorrência.');
       if (
         firstCycleOn < clock.today ||
         firstCycleOn < current.payload.startsOn ||
@@ -164,6 +166,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
         [contractId],
       );
       try {
+        if (current?.payload.billingMode === 'courtesy') return row;
         if (!current || current.status !== 'synced')
           throw new ConflictException('Condições vigentes pendentes.');
         let periodRevisionId = row.initialRevisionId;
@@ -174,8 +177,11 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
           );
           if (!period || period.status !== 'synced')
             throw new ConflictException('Condições da competência pendentes.');
-          periodRevisionId = period.id;
+          periodRevisionId =
+            period.payload.billingMode === 'courtesy' ? current.id : period.id;
         }
+        if (current.payload.courtesyEndedAt !== undefined)
+          periodRevisionId = current.id;
         const ack = await action(row, current, periodRevisionId);
         if (row.billingScheduleId && row.billingScheduleId !== ack.scheduleId)
           throw new ConflictException('Identidade da recorrência divergente.');
@@ -229,7 +235,7 @@ export class ContractRecurrenceRepository implements ContractRecurrenceRepositor
   }
   due() {
     return this.source.query<Array<{ customerId: string; contractId: string }>>(
-      `SELECT e.customer_id AS "customerId",e.contract_id AS "contractId" FROM control.contract_billing_enrollments e JOIN control.customer_contracts c ON c.id=e.contract_id WHERE c.status='ativo' AND e.enabled AND NOT EXISTS(SELECT 1 FROM control.financial_decisions f WHERE f.contract_id=c.id AND f.source_version=(SELECT max(g.source_version) FROM control.financial_decisions g WHERE g.contract_id=c.id) AND f.payload->>'recurrenceState' IN ('paused','renewal_required')) AND NOT EXISTS(SELECT 1 FROM control.contract_terminations t WHERE t.contract_id=c.id AND (e.next_cycle_on::timestamp AT TIME ZONE 'America/Recife')>=t.effective_at) AND e.next_cycle_on<=(now() AT TIME ZONE 'America/Recife')::date AND e.next_attempt_at<=now() ORDER BY e.next_attempt_at,e.contract_id LIMIT 10`,
+      `SELECT e.customer_id AS "customerId",e.contract_id AS "contractId" FROM control.contract_billing_enrollments e JOIN control.customer_contracts c ON c.id=e.contract_id WHERE c.status='ativo' AND e.enabled AND COALESCE((SELECT r.payload->>'billingMode' FROM control.contract_commercial_revisions r WHERE r.contract_id=c.id AND r.cancelled_at IS NULL AND (r.payload->>'effectiveAt')::timestamptz<=now() ORDER BY r.source_version DESC LIMIT 1),'standard')<>'courtesy' AND NOT EXISTS(SELECT 1 FROM control.financial_decisions f WHERE f.contract_id=c.id AND f.source_version=(SELECT max(g.source_version) FROM control.financial_decisions g WHERE g.contract_id=c.id) AND f.payload->>'recurrenceState' IN ('paused','renewal_required')) AND NOT EXISTS(SELECT 1 FROM control.contract_terminations t WHERE t.contract_id=c.id AND (e.next_cycle_on::timestamp AT TIME ZONE 'America/Recife')>=t.effective_at) AND e.next_cycle_on<=(now() AT TIME ZONE 'America/Recife')::date AND e.next_attempt_at<=now() ORDER BY e.next_attempt_at,e.contract_id LIMIT 10`,
     );
   }
 }
