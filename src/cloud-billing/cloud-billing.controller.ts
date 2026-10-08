@@ -65,6 +65,12 @@ export class CloudBillingController {
   ) {
     return this.service.provision(id, body);
   }
+  @Post(':accountUuid/usage') usage(
+    @Param('accountUuid', new ParseUUIDPipe()) id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.usage(id, body);
+  }
   @Get(':accountUuid') state(
     @Param('accountUuid', new ParseUUIDPipe()) id: string,
   ) {

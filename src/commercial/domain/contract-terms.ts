@@ -1,4 +1,11 @@
 import { z } from 'zod';
+export const overageSchema = z
+  .object({
+    dlq_events: z.number().int().positive().max(100000000).optional(),
+    ai_analysis: z.number().int().positive().max(100000000).optional(),
+    payload_replays: z.number().int().positive().max(100000000).optional(),
+  })
+  .strict();
 export const contractSnapshotSchema = z
   .object({
     sourceRevisionId: z.uuid(),
@@ -32,6 +39,7 @@ export const contractSnapshotSchema = z
     startsOn: z.iso.date(),
     endsOn: z.iso.date().nullable(),
     effectiveAt: z.iso.datetime({ offset: true }),
+    overage: overageSchema.optional(),
     entitlements: z
       .record(
         z.string().min(1).max(80),
@@ -65,6 +73,15 @@ export const contractSnapshotSchema = z
         v.amount === 0 &&
         v.setupAmount === 0),
     { message: 'Retorno de cortesia exige condições gratuitas.' },
+  )
+  .refine(
+    (v) =>
+      !v.overage ||
+      Object.keys(v.overage).length === 0 ||
+      (v.billingMode !== 'courtesy' &&
+        !['free', 'cloud-free'].includes(v.planId) &&
+        v.entitlements.deployment === 'cloud'),
+    { message: 'Excedentes faturáveis exigem contrato Cloud pago.' },
   )
   .refine((v) => !v.endsOn || v.endsOn >= v.startsOn, {
     message: 'Término anterior ao início.',
@@ -124,6 +141,7 @@ export const publishContractTermsSchema = z
     effectiveAt: z.iso
       .datetime({ offset: true })
       .transform((value) => new Date(value).toISOString()),
+    overage: overageSchema.optional(),
     overrides: entitlementOverridesSchema.default({}),
     reason: z.string().trim().min(3).max(1000),
   })
