@@ -71,7 +71,15 @@ export class CloudBillingService {
     receiptSecret();
     if (after && !z.string().uuid().safeParse(after).success)
       throw new BadRequestException('Cursor inválido.');
-    const rows = await this.source.query(
+    const rows = await this.source.query<
+      Array<{
+        id: string;
+        account_uuid: string;
+        effective_at: Date;
+        operational_retention_until: Date;
+        operational_erased_at: Date;
+      }>
+    >(
       `SELECT b.account_uuid,t.id,t.effective_at,t.operational_retention_until,t.operational_erased_at
       FROM control.contract_terminations t JOIN control.cloud_billing_bindings b ON b.contract_id=t.contract_id
       WHERE t.operational_erased_at IS NOT NULL AND ($1::uuid IS NULL OR b.account_uuid>$1::uuid)
@@ -108,7 +116,14 @@ export class CloudBillingService {
       .safeParse(body);
     if (!parsed.success) throw new BadRequestException('Confirmação inválida.');
     const binding = await this.binding(accountUuid);
-    const rows = await this.source.query(
+    const rows = await this.source.query<
+      Array<{
+        id: string;
+        effective_at: Date;
+        operational_retention_until: Date;
+        operational_erased_at: Date;
+      }>
+    >(
       `WITH confirmed AS (UPDATE control.contract_terminations SET operational_erased_at=coalesce(operational_erased_at,now())
       WHERE contract_id=$1 AND id=$2 AND status='completed' AND billing_synced_at IS NOT NULL
       AND licensing_synced_at IS NOT NULL AND operational_retention_days=30
@@ -317,6 +332,42 @@ export class CloudBillingService {
   async renew(accountUuid: string, body: unknown) {
     const row = await this.binding(accountUuid);
     return this.financial.renew(row.customer_id, row.contract_id, body, actor);
+  }
+  async usage(accountUuid: string, body: unknown) {
+    const row = await this.binding(accountUuid);
+    const parsed = z
+      .object({
+        entries: z
+          .array(
+            z
+              .object({
+                id: z.uuid(),
+                sourceRevisionId: z.uuid(),
+                resource: z.enum([
+                  'dlq_events',
+                  'ai_analysis',
+                  'payload_replays',
+                ]),
+                quantity: z.number().int().positive().max(1000000),
+                unitPriceCents: z.number().int().positive().max(100000000),
+                occurredAt: z.iso.datetime({ offset: true }),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+      })
+      .strict()
+      .safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Consumo inválido.');
+    return this.billing.request<{ acceptedIds: string[] }>(
+      `/commercial/contract-terms/${row.contract_id}/usage`,
+      {
+        method: 'POST',
+        actorId: actor,
+        body: { customerId: row.customer_id, ...parsed.data },
+      },
+    );
   }
   async state(accountUuid: string) {
     await this.changes.processAccount(accountUuid);
