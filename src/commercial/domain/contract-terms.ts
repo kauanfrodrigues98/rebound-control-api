@@ -23,7 +23,15 @@ export const contractSnapshotSchema = z
     courtesyEndedAt: z.iso.datetime({ offset: true }).optional(),
     amount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     setupAmount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    currency: z.literal('BRL'),
+    currency: z.enum(['BRL', 'USD']),
+    currencyChange: z
+      .object({
+        from: z.enum(['BRL', 'USD']),
+        requestedBy: z.string().trim().min(3).max(200),
+      })
+      .strict()
+      .optional(),
+
     intervalMonths: z.union([
       z.literal(1),
       z.literal(3),
@@ -83,6 +91,9 @@ export const contractSnapshotSchema = z
         v.entitlements.deployment === 'cloud'),
     { message: 'Excedentes faturáveis exigem contrato Cloud pago.' },
   )
+  .refine((v) => v.currency === 'BRL' || !v.allowedMethods.includes('boleto'), {
+    message: 'Boleto está disponível somente em BRL.',
+  })
   .refine((v) => !v.endsOn || v.endsOn >= v.startsOn, {
     message: 'Término anterior ao início.',
   })
@@ -122,6 +133,7 @@ export const entitlementOverridesSchema = z
 export const publishContractTermsSchema = z
   .object({
     planId: contractSnapshotSchema.shape.planId,
+    currency: z.enum(['BRL', 'USD']).default('BRL'),
     pricing: z.enum(['catalog', 'custom']),
     billingMode: z.enum(['standard', 'courtesy']).optional(),
     courtesyExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),

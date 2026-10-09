@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -56,8 +57,10 @@ export class CloudBillingController {
   @Get('data-erasure-ledger') ledger(@Query('after') after?: string) {
     return this.service.erasureLedger(after);
   }
-  @Get('plans') plans() {
-    return this.service.plans();
+  @Get('plans') plans(@Query('currency') currency = 'BRL') {
+    if (!['BRL', 'USD'].includes(currency))
+      throw new BadRequestException('Moeda inválida.');
+    return this.service.plans(currency as 'BRL' | 'USD');
   }
   @Post(':accountUuid/provision') provision(
     @Param('accountUuid', new ParseUUIDPipe()) id: string,
