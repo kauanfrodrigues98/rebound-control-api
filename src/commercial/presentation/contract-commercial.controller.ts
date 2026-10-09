@@ -1,3 +1,4 @@
+import { ContractCurrencyService } from '../application/contract-currency.service';
 import { ContractCancellationService } from '../application/contract-cancellation.service';
 import {
   Body,
@@ -23,6 +24,7 @@ import { ContractCommercialService } from '../application/contract-commercial.se
 export class ContractCommercialController {
   constructor(
     private readonly commercial: ContractCommercialService,
+    private readonly currencies: ContractCurrencyService,
     private readonly cancellations: ContractCancellationService,
   ) {}
   @Get()
@@ -42,6 +44,24 @@ export class ContractCommercialController {
     @Headers('idempotency-key') key: string,
   ) {
     return this.commercial.publish(customerId, contractId, body, actor.id, key);
+  }
+  @Post('currency/preview')
+  previewCurrency(
+    @Param('customerId', new ParseUUIDPipe()) customer: string,
+    @Param('contractId', new ParseUUIDPipe()) contract: string,
+    @Body() body: unknown,
+  ) {
+    return this.currencies.preview(customer, contract, body);
+  }
+  @Post('currency')
+  changeCurrency(
+    @Param('customerId', new ParseUUIDPipe()) customer: string,
+    @Param('contractId', new ParseUUIDPipe()) contract: string,
+    @Body() body: unknown,
+    @CurrentUser() actor: CurrentControlUser,
+    @Headers('idempotency-key') key: string,
+  ) {
+    return this.currencies.schedule(customer, contract, body, actor.id, key);
   }
   @Post('courtesy/end')
   endCourtesy(

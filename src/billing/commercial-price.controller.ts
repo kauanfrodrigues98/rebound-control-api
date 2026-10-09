@@ -40,13 +40,19 @@ export class CommercialPriceController {
       throw new ConflictException('Plano arquivado não aceita novos preços.');
   }
   @Get()
-  async list(@Param('planId') planId: string, @Query('page') page?: string) {
+  async list(
+    @Param('planId') planId: string,
+    @Query('page') page?: string,
+    @Query('currency') currency = 'BRL',
+  ) {
     await this.plan(planId);
+    if (!['BRL', 'USD'].includes(currency))
+      throw new BadRequestException('Moeda inválida.');
     const value = Number(page ?? 1);
     if (!Number.isInteger(value) || value < 1 || value > 10000)
       throw new BadRequestException('Página inválida.');
     return this.billing.request(
-      `/commercial/plans/${encodeURIComponent(planId)}/prices?page=${value}`,
+      `/commercial/plans/${encodeURIComponent(planId)}/prices?page=${value}&currency=${currency}`,
     );
   }
   @Post()

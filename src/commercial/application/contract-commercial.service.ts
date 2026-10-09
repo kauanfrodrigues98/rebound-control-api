@@ -124,7 +124,7 @@ export class ContractCommercialService {
         `/commercial/plans/${encodeURIComponent(plan.id)}/prices/${input.priceVersionId}`,
       );
       if (
-        price.currency !== 'BRL' ||
+        price.currency !== input.currency ||
         new Date(price.effectiveAt) > new Date(input.effectiveAt)
       )
         throw new ConflictException(
@@ -146,7 +146,7 @@ export class ContractCommercialService {
       priceVersionId: input.priceVersionId,
       amount,
       intervalMonths,
-      currency: 'BRL',
+      currency: input.currency,
       setupAmount: input.setupAmount,
       dueDay: input.dueDay,
       allowedMethods: [...input.allowedMethods].sort(),

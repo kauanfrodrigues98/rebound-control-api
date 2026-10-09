@@ -137,6 +137,10 @@ export class CloudPlanChangeService {
       throw new ConflictException(
         'Sua conta está em cortesia. Fale com nosso time para encerrar a concessão antes de contratar outro plano.',
       );
+    if (plan.price.currency !== base.currency)
+      throw new ConflictException(
+        'A moeda do contrato não pode mudar no upgrade.',
+      );
     const target: Target = {
       customerId: binding.customer_id,
       contractId: binding.contract_id,
@@ -144,7 +148,7 @@ export class CloudPlanChangeService {
       pricing: 'catalog',
       priceVersionId: plan.price.id,
       amount: plan.price.amount,
-      currency: 'BRL',
+      currency: base.currency,
       intervalMonths: plan.price.intervalMonths,
       setupAmount: 0,
       dueDay: base.dueDay,

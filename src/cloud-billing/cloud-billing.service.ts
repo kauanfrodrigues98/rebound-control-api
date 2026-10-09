@@ -27,7 +27,7 @@ export interface Plan {
 export interface Price {
   id: string;
   amount: number;
-  currency: 'BRL';
+  currency: 'BRL' | 'USD';
   intervalMonths: 1 | 3 | 6 | 12;
 }
 interface Binding {
@@ -41,6 +41,7 @@ interface Binding {
     effectiveAt: string;
     planId: string;
     priceId: string;
+    currency?: 'BRL' | 'USD';
     dueDay: number;
   };
 }
@@ -146,7 +147,7 @@ export class CloudBillingService {
     );
     return { confirmed: true };
   }
-  async plans() {
+  async plans(currency: 'BRL' | 'USD' = 'BRL') {
     const catalog = await this.licensing.request<{ plans: Plan[] }>(
       '/admin/licenses/plans',
     );
@@ -154,7 +155,7 @@ export class CloudBillingService {
     for (const plan of catalog.plans) {
       if (!plan.active || plan.deployment !== 'cloud') continue;
       const prices = await this.billing.request<{ current: Price | null }>(
-        `/commercial/plans/${encodeURIComponent(plan.id)}/prices`,
+        `/commercial/plans/${encodeURIComponent(plan.id)}/prices?currency=${currency}`,
       );
       if (prices.current) result.push({ ...plan, price: prices.current });
     }
@@ -173,6 +174,7 @@ export class CloudBillingService {
       .object({
         name: z.string().trim().min(1).max(180),
         email: z.email().max(320),
+        currency: z.enum(['BRL', 'USD']).default('BRL'),
       })
       .strict()
       .safeParse(body);
@@ -185,7 +187,7 @@ export class CloudBillingService {
     );
     if (existing) binding = existing;
     else {
-      const plans = await this.plans(),
+      const plans = await this.plans(parsed.data.currency),
         free = plans.plans.find(
           (v) => v.id === env.CLOUD_DEFAULT_PLAN_ID && v.price.amount === 0,
         );
@@ -220,7 +222,7 @@ export class CloudBillingService {
           [customerId, parsed.data.name],
         );
         await tx.query(
-          `INSERT INTO control.customer_contracts(id,customer_id,code,plan,plan_id,status,cycle,starts_on,due_day,payment_method) VALUES($1,$2,$3,$4,$5,'ativo','mensal',$6,$7,'Cartão ou boleto')`,
+          `INSERT INTO control.customer_contracts(id,customer_id,code,plan,plan_id,status,cycle,starts_on,due_day,payment_method) VALUES($1,$2,$3,$4,$5,'ativo','mensal',$6,$7,$8)`,
           [
             contractId,
             customerId,
@@ -229,6 +231,7 @@ export class CloudBillingService {
             free.id,
             clock.day,
             String(onboarding.dueDay),
+            onboarding.currency === 'USD' ? 'Cartão' : 'Cartão ou boleto',
           ],
         );
         return (
@@ -251,11 +254,13 @@ export class CloudBillingService {
         row.contract_id,
         {
           planId: initial.planId,
+          currency: initial.currency ?? 'BRL',
           pricing: 'catalog',
           priceVersionId: initial.priceId,
           setupAmount: 0,
           dueDay: initial.dueDay,
-          allowedMethods: ['card', 'boleto'],
+          allowedMethods:
+            initial.currency === 'USD' ? ['card'] : ['card', 'boleto'],
           startsOn: initial.startsOn,
           endsOn: null,
           effectiveAt:
@@ -297,7 +302,8 @@ export class CloudBillingService {
             name: initial.name,
             email: initial.email,
             document: '',
-            allowedMethods: ['card', 'boleto'],
+            allowedMethods:
+              initial.currency === 'USD' ? ['card'] : ['card', 'boleto'],
             externalInstructions: '',
             notificationsEnabled: false,
           },
@@ -413,7 +419,13 @@ export class CloudBillingService {
       .safeParse(body);
     if (!parsed.success) throw new BadRequestException('Plano inválido.');
     const row = await this.binding(accountUuid);
-    const catalog = await this.plans();
+    const { current } = await this.commercial.list(
+      row.customer_id,
+      row.contract_id,
+    );
+    const catalog = await this.plans(
+      current?.terms.currency ?? row.onboarding.currency ?? 'BRL',
+    );
     const plan = catalog.plans.find((value) => value.id === parsed.data.planId);
     if (!plan)
       throw new BadRequestException(
@@ -446,7 +458,13 @@ export class CloudBillingService {
       parsed.data.expectedAmount,
     );
     if (replay) return replay;
-    const catalog = await this.plans();
+    const { current } = await this.commercial.list(
+      row.customer_id,
+      row.contract_id,
+    );
+    const catalog = await this.plans(
+      current?.terms.currency ?? row.onboarding.currency ?? 'BRL',
+    );
     const plan = catalog.plans.find((value) => value.id === parsed.data.planId);
     if (!plan)
       throw new BadRequestException(

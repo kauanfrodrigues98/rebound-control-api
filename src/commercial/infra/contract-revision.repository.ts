@@ -70,6 +70,10 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
     allowHistoricalEffectiveAt = false,
   ) {
     return this.source.transaction(async (manager) => {
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+        [`commercial-customer:${customerId}`],
+      );
       const [contract] = await manager.query<ContractReference[]>(
         `SELECT id, customer_id AS "customerId", status FROM control.customer_contracts WHERE id=$1 AND customer_id=$2 FOR UPDATE`,
         [contractId, customerId],
@@ -84,7 +88,19 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
           throw new ConflictException('Chave utilizada para outras condições.');
         return existing;
       }
-      const [termination] = await manager.query(
+      const [currency] = await manager.query<Array<{ currency: string }>>(
+        `SELECT payload->>'currency' AS currency FROM control.contract_commercial_revisions WHERE customer_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz<=now() ORDER BY created_at DESC,source_version DESC LIMIT 1`,
+        [customerId],
+      );
+      if (
+        currency &&
+        currency.currency !== input.currency &&
+        !input.currencyChange
+      )
+        throw new ConflictException(
+          'A moeda da conta financeira não pode ser alterada.',
+        );
+      const [termination] = await manager.query<Array<{ id: string }>>(
         'SELECT id FROM control.contract_terminations WHERE contract_id=$1',
         [contractId],
       );
@@ -112,6 +128,49 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
         `SELECT ${columns} FROM control.contract_commercial_revisions WHERE contract_id=$1 AND cancelled_at IS NULL ORDER BY source_version DESC LIMIT 1`,
         [contractId],
       );
+      const [future] = await manager.query<
+        Array<{ id: string; currencyChange: boolean }>
+      >(
+        `SELECT id, payload ? 'currencyChange' AS "currencyChange" FROM control.contract_commercial_revisions WHERE customer_id=$1 AND cancelled_at IS NULL AND (payload->>'effectiveAt')::timestamptz>now() AND (contract_id=$2 OR payload ? 'currencyChange') ORDER BY (payload ? 'currencyChange') DESC LIMIT 1`,
+        [customerId, contractId],
+      );
+      if (
+        future &&
+        (future.currencyChange ||
+          input.currencyChange ||
+          latestActive?.payload.currencyChange ||
+          currency?.currency !== input.currency)
+      )
+        throw new ConflictException(
+          'Resolva a revisão futura antes de alterar a moeda ou as condições.',
+        );
+      if (input.currencyChange && currency?.currency !== input.currency) {
+        const [other] = await manager.query<Array<{ id: string }>>(
+          "SELECT id FROM control.customer_contracts WHERE customer_id=$1 AND id<>$2 AND status NOT IN ('encerrado','cancelado') LIMIT 1",
+          [customerId, contractId],
+        );
+        const [pending] = await manager.query<Array<{ id: string }>>(
+          "SELECT id FROM control.cloud_plan_change_requests WHERE customer_id=$1 AND status IN ('requested','awaiting_payment','scheduled','activated') LIMIT 1",
+          [customerId],
+        );
+        const [cycle] = await manager.query<Array<{ nextCycleOn: string }>>(
+          'SELECT next_cycle_on AS "nextCycleOn" FROM control.contract_billing_enrollments WHERE contract_id=$1 AND enabled=true',
+          [contractId],
+        );
+        if (
+          other ||
+          pending ||
+          !cycle?.nextCycleOn ||
+          !latestActive ||
+          latestActive.status !== 'synced' ||
+          input.currencyChange.from !== latestActive.payload.currency ||
+          new Date(input.effectiveAt).getTime() !==
+            new Date(`${cycle.nextCycleOn}T00:00:00.000-03:00`).getTime()
+        )
+          throw new ConflictException(
+            'A troca exige um único contrato ativo, sem alterações pendentes, e vigência no próximo ciclo.',
+          );
+      }
       const at = new Date(input.effectiveAt).getTime();
       if (
         input.billingMode === 'courtesy' ||
@@ -179,6 +238,16 @@ export class ContractRevisionRepository implements ContractRevisionRepositoryPor
           actorId,
         ],
       );
+      if (input.currencyChange && currency?.currency !== input.currency) {
+        await manager.query(
+          "INSERT INTO control.customer_timeline_entries(id,customer_id,type,title,description) VALUES($1,$2,'contrato','Alteração de moeda agendada',$3)",
+          [
+            randomUUID(),
+            customerId,
+            `Contrato ${contractId}. ${input.currencyChange.from} → ${input.currency}. Vigência ${input.effectiveAt}. Solicitante/chamado: ${input.currencyChange.requestedBy}. Operador ${actorId}. ${input.reason}`,
+          ],
+        );
+      }
       if (
         input.billingMode === 'courtesy' ||
         latestActive?.payload.billingMode === 'courtesy'
